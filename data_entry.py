@@ -666,17 +666,63 @@ class SalesEntryApp:
     def _create_action_buttons(self) -> None:
         top_buttons = ttk.Frame(self.header_frame)
         top_buttons.pack(side="right", padx=(0, 12))
-        ttk.Button(top_buttons, text="Ara / Filtrele", command=self.open_filter_window).pack(side="left", padx=4)
+        ttk.Button(
+            top_buttons,
+            text="📊 Rapor Oluştur",
+            style="Accent.TButton",
+            command=self.generate_report,
+        ).pack(side="left", padx=(0, 4))
+
+        spacer = ttk.Frame(top_buttons, width=16)
+        spacer.pack(side="left")
+        spacer.pack_propagate(False)
+
+        ttk.Button(top_buttons, text="Ara / Filtrele", command=self.open_filter_window).pack(
+            side="left", padx=(12, 4)
+        )
         ttk.Button(top_buttons, text="Satış Elemanları", command=self.open_sales_rep_manager).pack(side="left", padx=4)
         ttk.Button(top_buttons, text="Dışa Aktar", command=self.export_filtered_data).pack(side="left", padx=4)
 
     def _create_bottom_buttons(self) -> None:
         bottom_frame = ttk.Frame(self.root)
         bottom_frame.pack(fill="x", padx=16, pady=8)
-        ttk.Button(bottom_frame, text="📊 Rapor Oluştur", style="Accent.TButton", command=self.generate_report).pack(
-            side="left"
+        quick_actions = ttk.Frame(bottom_frame)
+        quick_actions.pack(side="left")
+
+        self.quick_save_button = ttk.Button(
+            quick_actions,
+            text="💾 Kaydet",
+            style="ActionAccent.TButton",
+            command=self.save_data,
         )
+        self.quick_save_button.pack(side="left", padx=4)
+
+        self.quick_update_button = ttk.Button(
+            quick_actions,
+            text="✏️ Güncelle",
+            style="ActionPrimary.TButton",
+            command=self.update_data,
+        )
+        self.quick_update_button.pack(side="left", padx=4)
+
+        self.quick_delete_button = ttk.Button(
+            quick_actions,
+            text="🗑 Sil",
+            style="ActionDanger.TButton",
+            command=self.delete_data,
+        )
+        self.quick_delete_button.pack(side="left", padx=4)
+
+        ttk.Button(
+            quick_actions,
+            text="🧹 Temizle",
+            style="Action.TButton",
+            command=self.reset_form,
+        ).pack(side="left", padx=4)
+
         ttk.Button(bottom_frame, text="Yedeklemeyi Aç", command=self.open_backup_directory).pack(side="right")
+
+        self._update_button_states()
 
     # ----------------------------------------------------------------- helpers
     def _set_date_field(self, field: str, date_value: datetime) -> None:
@@ -729,10 +775,28 @@ class SalesEntryApp:
         else:
             self.save_button.state(["disabled"])
 
+        if hasattr(self, "quick_save_button"):
+            if self._new_entry_mode and self.selected_index is None:
+                self.quick_save_button.state(["!disabled"])
+            else:
+                self.quick_save_button.state(["disabled"])
+
         if self.selected_index is not None:
             self.update_button.state(["!disabled"])
         else:
             self.update_button.state(["disabled"])
+
+        if hasattr(self, "quick_update_button"):
+            if self.selected_index is not None:
+                self.quick_update_button.state(["!disabled"])
+            else:
+                self.quick_update_button.state(["disabled"])
+
+        if hasattr(self, "quick_delete_button"):
+            if self.selected_index is not None:
+                self.quick_delete_button.state(["!disabled"])
+            else:
+                self.quick_delete_button.state(["disabled"])
 
         if self.history:
             self.undo_button.state(["!disabled"])
