@@ -33,7 +33,6 @@ REQUIRED_COLUMNS = [
     "Customer Name",
     "Customer DO No",
     "Definition",
-    "C4C Code",
     "Sales Ticket Reference",
     "SO No",
     "PO No",
