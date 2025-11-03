@@ -555,6 +555,13 @@ class SalesEntryApp:
         new_rep_var = tk.StringVar()
         ttk.Entry(entry_frame, textvariable=new_rep_var).pack(fill="x", pady=(2, 0))
 
+        def populate_entry_from_selection(event: tk.Event) -> None:
+            selected = listbox.curselection()
+            if len(selected) == 1:
+                new_rep_var.set(listbox.get(selected[0]))
+
+        listbox.bind("<<ListboxSelect>>", populate_entry_from_selection)
+
         def add_rep() -> None:
             name = new_rep_var.get().strip()
             if not name:
@@ -572,10 +579,42 @@ class SalesEntryApp:
             for index in reversed(selected):
                 listbox.delete(index)
 
+        def edit_selected() -> None:
+            selected = listbox.curselection()
+            if len(selected) != 1:
+                messagebox.showinfo(
+                    "Bilgi", "Lütfen düzenlemek için tek bir isim seçiniz", parent=window
+                )
+                return
+            new_name = new_rep_var.get().strip()
+            if not new_name:
+                messagebox.showinfo(
+                    "Bilgi", "Yeni isim alanı boş olamaz", parent=window
+                )
+                return
+            current_index = selected[0]
+            current_name = listbox.get(current_index)
+            existing_names = listbox.get(0, "end")
+            if new_name in existing_names and new_name != current_name:
+                messagebox.showinfo(
+                    "Bilgi", "Bu isim zaten listede", parent=window
+                )
+                return
+            listbox.delete(current_index)
+            listbox.insert(current_index, new_name)
+            listbox.selection_set(current_index)
+
         button_frame = ttk.Frame(window)
         button_frame.pack(fill="x", padx=16, pady=4)
-        ttk.Button(button_frame, text="Ekle", command=add_rep).pack(side="left", expand=True, padx=4)
-        ttk.Button(button_frame, text="Sil", command=remove_selected).pack(side="left", expand=True, padx=4)
+        ttk.Button(button_frame, text="Ekle", command=add_rep).pack(
+            side="left", expand=True, padx=4
+        )
+        ttk.Button(button_frame, text="Düzenle", command=edit_selected).pack(
+            side="left", expand=True, padx=4
+        )
+        ttk.Button(button_frame, text="Sil", command=remove_selected).pack(
+            side="left", expand=True, padx=4
+        )
 
         def save_and_close() -> None:
             raw_reps = [listbox.get(i) for i in range(listbox.size())]
