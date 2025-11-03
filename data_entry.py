@@ -197,9 +197,17 @@ class SalesEntryApp:
         if theme == "dark":
             bg = COLORS["bg_dark"]
             fg = "white"
+            action_bg = "#374151"
+            action_fg = "white"
+            disabled_bg = "#4b5563"
+            disabled_fg = "#9ca3af"
         else:
             bg = COLORS["bg_light"]
             fg = COLORS["text_dark"]
+            action_bg = "#e5e7eb"
+            action_fg = COLORS["text_dark"]
+            disabled_bg = "#d1d5db"
+            disabled_fg = COLORS["text_light"]
         self.root.configure(bg=bg)
         style = ttk.Style(self.root)
         style.theme_use("clam")
@@ -213,14 +221,75 @@ class SalesEntryApp:
             foreground=[("active", "white")],
         )
         style.configure(
+            "TLabelframe",
+            background=bg,
+            borderwidth=0,
+            padding=(10, 8),
+        )
+        style.configure(
+            "TLabelframe.Label",
+            background=bg,
+            foreground=COLORS["text_light"] if theme != "dark" else "#d1d5db",
+            font=("Segoe UI", 11, "bold"),
+        )
+        style.configure(
+            "Action.TButton",
+            font=("Segoe UI", 11, "bold"),
+            padding=(12, 10),
+            background=action_bg,
+            foreground=action_fg,
+        )
+        style.map(
+            "Action.TButton",
+            background=[("disabled", disabled_bg), ("active", COLORS["primary"])],
+            foreground=[("disabled", disabled_fg), ("active", "white")],
+        )
+        style.configure(
+            "ActionPrimary.TButton",
+            font=("Segoe UI", 11, "bold"),
+            padding=(12, 10),
+            background=COLORS["primary"],
+            foreground="white",
+            borderwidth=0,
+        )
+        style.map(
+            "ActionPrimary.TButton",
+            background=[("disabled", disabled_bg), ("active", COLORS["secondary"])],
+            foreground=[("disabled", disabled_fg), ("active", "white")],
+        )
+        style.configure(
             "Accent.TButton",
             background=COLORS["primary"],
             foreground="white",
             borderwidth=0,
         )
         style.map("Accent.TButton", background=[("active", COLORS["secondary"])])
-        style.configure("Danger.TButton", background=COLORS["danger"], foreground="white")
-        style.map("Danger.TButton", background=[("active", "#b91c1c")])
+        style.configure(
+            "ActionAccent.TButton",
+            font=("Segoe UI", 11, "bold"),
+            padding=(12, 10),
+            background=COLORS["success"],
+            foreground="white",
+            borderwidth=0,
+        )
+        style.map(
+            "ActionAccent.TButton",
+            background=[("disabled", disabled_bg), ("active", "#059669")],
+            foreground=[("disabled", disabled_fg), ("active", "white")],
+        )
+        style.configure(
+            "ActionDanger.TButton",
+            font=("Segoe UI", 11, "bold"),
+            padding=(12, 10),
+            background=COLORS["danger"],
+            foreground="white",
+            borderwidth=0,
+        )
+        style.map(
+            "ActionDanger.TButton",
+            background=[("disabled", disabled_bg), ("active", "#b91c1c")],
+            foreground=[("disabled", disabled_fg), ("active", "white")],
+        )
 
     def _ensure_directories(self) -> None:
         BACKUP_DIR.mkdir(exist_ok=True)
@@ -479,54 +548,64 @@ class SalesEntryApp:
         create_radio("Faturalandi", "Invoiced")
 
         # Aksiyon butonları
-        btn_frame = ttk.Frame(self.form_frame)
-        btn_frame.pack(fill="x", pady=(12, 0))
+        action_frame = ttk.LabelFrame(self.form_frame, text="Kayıt İşlemleri")
+        action_frame.pack(fill="x", pady=(18, 0))
+        for column in range(4):
+            action_frame.columnconfigure(column, weight=1)
 
-        top_btn_row = ttk.Frame(btn_frame)
-        top_btn_row.pack(fill="x")
-        ttk.Button(top_btn_row, text="Temizle", command=lambda: self.reset_form()).pack(
-            side="left", expand=True, fill="x", padx=2
-        )
-        self.new_entry_button = ttk.Button(
-            top_btn_row,
-            text="Yeni Sipariş Verisi",
-            command=self.start_new_entry,
-        )
-        self.new_entry_button.pack(side="left", expand=True, fill="x", padx=2)
-
-        bottom_btn_row = ttk.Frame(btn_frame)
-        bottom_btn_row.pack(fill="x", pady=(6, 0))
         self.save_button = ttk.Button(
-            bottom_btn_row,
-            text="Kaydet",
-            style="Accent.TButton",
+            action_frame,
+            text="💾 Kaydet",
+            style="ActionAccent.TButton",
             command=self.save_data,
         )
-        self.save_button.pack(side="left", expand=True, fill="x", padx=2)
-        ttk.Button(
-            bottom_btn_row,
-            text="Sil",
-            style="Danger.TButton",
-            command=self.delete_data,
-        ).pack(side="left", expand=True, fill="x", padx=2)
+        self.save_button.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
+
         self.update_button = ttk.Button(
-            bottom_btn_row,
-            text="Güncelle",
+            action_frame,
+            text="✏️ Güncelle",
+            style="ActionPrimary.TButton",
             command=self.update_data,
         )
-        self.update_button.pack(side="left", expand=True, fill="x", padx=2)
+        self.update_button.grid(row=0, column=1, sticky="ew", padx=4, pady=4)
+
+        ttk.Button(
+            action_frame,
+            text="🗑 Sil",
+            style="ActionDanger.TButton",
+            command=self.delete_data,
+        ).grid(row=0, column=2, sticky="ew", padx=4, pady=4)
+
         self.undo_button = ttk.Button(
-            bottom_btn_row,
-            text="Geri Al",
+            action_frame,
+            text="↩ Geri Al",
+            style="Action.TButton",
             command=self.undo_last_change,
         )
-        self.undo_button.pack(side="left", expand=True, fill="x", padx=2)
+        self.undo_button.grid(row=0, column=3, sticky="ew", padx=4, pady=4)
+
+        ttk.Button(
+            action_frame,
+            text="🧹 Temizle",
+            style="Action.TButton",
+            command=self.reset_form,
+        ).grid(row=1, column=0, sticky="ew", padx=4, pady=4)
+
+        self.new_entry_button = ttk.Button(
+            action_frame,
+            text="＋ Yeni Sipariş Verisi",
+            style="ActionPrimary.TButton",
+            command=self.start_new_entry,
+        )
+        self.new_entry_button.grid(row=1, column=1, columnspan=2, sticky="ew", padx=4, pady=4)
+
         self.redo_button = ttk.Button(
-            bottom_btn_row,
-            text="İleri Al",
+            action_frame,
+            text="↪ İleri Al",
+            style="Action.TButton",
             command=self.redo_last_change,
         )
-        self.redo_button.pack(side="left", expand=True, fill="x", padx=2)
+        self.redo_button.grid(row=1, column=3, sticky="ew", padx=4, pady=4)
 
         self._update_button_states()
 
