@@ -13,7 +13,7 @@ import os
 import threading
 import tkinter as tk
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -42,7 +42,6 @@ COLUMNS = [
     "Customer Name",
     "Customer DO No",
     "Definition",
-    "C4C Code",
     "Sales Ticket Reference",
     "SO No",
     "PO No",
@@ -95,6 +94,7 @@ class FilterOptions:
     search_text: str = ""
     salesman: str = ""
     invoiced: str = ""
+    so_no: str = ""
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
 
@@ -113,6 +113,7 @@ class SalesEntryApp:
         self.selected_index: Optional[int] = None
         self.filter_options = FilterOptions()
         self._updating_cpi_field = False
+        self._suspend_delivery_autofill = False
 
         self._config = self._load_config()
         self.sales_reps = self._load_sales_reps()
@@ -302,6 +303,7 @@ class SalesEntryApp:
 
     def _create_form(self) -> None:
         self.form_vars: Dict[str, tk.Variable] = {}
+        self.date_entries: Dict[str, DateEntry] = {}
 
         def create_labeled_row(parent, label_text, widget_factory):
             """Create a labelled row and ensure the widget is packed correctly."""
@@ -343,7 +345,12 @@ class SalesEntryApp:
                 entry.set_date(today)
                 return entry
 
-            create_labeled_row(self.form_frame, date_labels[field], widget_factory)
+            widget = create_labeled_row(self.form_frame, date_labels[field], widget_factory)
+            if isinstance(widget, DateEntry):
+                self.date_entries[field] = widget
+
+        self.form_vars["Date of Request"].trace_add("write", self._handle_request_date_change)
+        self._handle_request_date_change()
 
         # Satış bilgileri
         salesman_options = self._get_sales_rep_options()
@@ -366,11 +373,10 @@ class SalesEntryApp:
             ("Customer Name", "Müşteri Adı"),
             ("Customer DO No", "Müşteri Sipariş No"),
             ("Definition", "Ürün Tanımı"),
-            ("C4C Code", "C4C Kodu"),
-            ("Sales Ticket Reference", "Satış Ref"),
+            ("Sales Ticket Reference", "SalesForce Ref"),
             ("SO No", "SO No"),
             ("PO No", "PO No"),
-            ("Delivery Note", "Teslimat Notu"),
+            ("Delivery Note", "Notlar"),
         ]
         for field, label in text_fields:
             self.form_vars[field] = tk.StringVar()
@@ -457,7 +463,11 @@ class SalesEntryApp:
 
         self.tree.tag_configure("invoiced", background="#d1fae5")
 
-        display_names = {"Invoiced Amount": "CPI Tutarı"}
+        display_names = {
+            "Invoiced Amount": "CPI Tutarı",
+            "Delivery Note": "Notlar",
+            "Sales Ticket Reference": "SalesForce Ref",
+        }
         for col in columns:
             heading_text = display_names.get(col, col)
             self.tree.heading(col, text=heading_text, command=partial(self.sort_by_column, col))
@@ -496,6 +506,31 @@ class SalesEntryApp:
         ttk.Button(bottom_frame, text="Yedeklemeyi Aç", command=self.open_backup_directory).pack(side="right")
 
     # ----------------------------------------------------------------- helpers
+    def _set_date_field(self, field: str, date_value: datetime) -> None:
+        entry = self.date_entries.get(field)
+        if entry:
+            entry.set_date(date_value)
+        else:
+            self.form_vars[field].set(date_value.strftime("%d.%m.%Y"))
+
+    def _handle_request_date_change(self, *_args) -> None:
+        if self._suspend_delivery_autofill:
+            return
+        request_value = self.form_vars["Date of Request"].get().strip()
+        if not request_value:
+            return
+        request_date = self._parse_date_str(request_value)
+        if request_date is None:
+            return
+        if isinstance(request_date, pd.Timestamp):
+            request_date = request_date.to_pydatetime()
+        if not isinstance(request_date, datetime):
+            return
+        if request_date.tzinfo is not None:
+            request_date = request_date.replace(tzinfo=None)
+        delivery_date = request_date + timedelta(weeks=8)
+        self._set_date_field("Date of Delivery", delivery_date)
+
     def _update_status(self, text: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.status_var.set(f"[{timestamp}] {text}")
@@ -664,6 +699,13 @@ class SalesEntryApp:
         except Exception as exc:
             messagebox.showerror("Hata", f"Veri yüklenemedi: {exc}")
             return
+        for column in COLUMNS:
+            if column not in self.df.columns:
+                self.df[column] = ""
+        extra_columns = [col for col in self.df.columns if col not in COLUMNS]
+        if extra_columns:
+            self.df = self.df.drop(columns=extra_columns)
+        self.df = self.df[COLUMNS]
         self._normalise_discount_values()
         self.apply_filters()
         self._update_status("Veri yüklendi")
@@ -819,6 +861,8 @@ class SalesEntryApp:
         opts = self.filter_options
         if opts.search_text:
             df = df[df["Customer Name"].str.contains(opts.search_text, case=False, na=False)]
+        if opts.so_no:
+            df = df[df["SO No"].astype(str).str.contains(opts.so_no, case=False, na=False)]
         if opts.salesman:
             df = df[df["Sales Man"] == opts.salesman]
         if opts.invoiced:
@@ -842,12 +886,19 @@ class SalesEntryApp:
                 elif key == "Sales Man":
                     options = self._get_sales_rep_options()
                     var.set(options[0] if options else "")
-                elif "Date" in key:
-                    var.set(datetime.today().strftime("%d.%m.%Y"))
+                elif key in ("Date of Request", "Date of Issue", "Date of Delivery"):
+                    continue
                 else:
                     var.set("")
         self.selected_index = None
         self.tree.selection_remove(self.tree.selection())
+        today = datetime.today()
+        delivery_date = today + timedelta(weeks=8)
+        self._suspend_delivery_autofill = True
+        self._set_date_field("Date of Request", today)
+        self._set_date_field("Date of Issue", today)
+        self._set_date_field("Date of Delivery", delivery_date)
+        self._suspend_delivery_autofill = False
         self._update_cpi_field()
         self._update_status("Form temizlendi")
 
@@ -860,17 +911,27 @@ class SalesEntryApp:
         if len(values) != len(COLUMNS):
             return
         row_data = dict(zip(COLUMNS, values))
-        for col, value in row_data.items():
-            if col in ("QI Forecast", "Invoiced"):
-                self.form_vars[col].set(str(value).upper())
-            elif col in ("Date of Request", "Date of Issue", "Date of Delivery"):
-                try:
-                    dt = pd.to_datetime(value)
-                    self.form_vars[col].set(dt.strftime("%d.%m.%Y"))
-                except Exception:
-                    self.form_vars[col].set(value)
-            elif col in self.form_vars:
-                self.form_vars[col].set(str(value) if value is not None else "")
+        self._suspend_delivery_autofill = True
+        try:
+            for col, value in row_data.items():
+                if col in ("QI Forecast", "Invoiced"):
+                    self.form_vars[col].set(str(value).upper())
+                elif col in ("Date of Request", "Date of Issue", "Date of Delivery"):
+                    try:
+                        dt = pd.to_datetime(value)
+                        if pd.isna(dt):
+                            raise ValueError
+                        if isinstance(dt, pd.Timestamp):
+                            dt = dt.to_pydatetime()
+                        if isinstance(dt, datetime) and dt.tzinfo is not None:
+                            dt = dt.replace(tzinfo=None)
+                        self._set_date_field(col, dt)
+                    except Exception:
+                        self.form_vars[col].set(value)
+                elif col in self.form_vars:
+                    self.form_vars[col].set(str(value) if value is not None else "")
+        finally:
+            self._suspend_delivery_autofill = False
 
         amount = self._to_float(row_data.get("Amount")) or 0
         discount_value = self._to_float(row_data.get("Total Discount"))
@@ -1086,13 +1147,17 @@ class SalesEntryApp:
     def open_filter_window(self) -> None:
         popup = tk.Toplevel(self.root)
         popup.title("Ara / Filtrele")
-        popup.geometry("320x320")
+        popup.geometry("320x360")
 
         opts = self.filter_options
 
         ttk.Label(popup, text="Müşteri Adı").pack(pady=4)
         search_var = tk.StringVar(value=opts.search_text)
         ttk.Entry(popup, textvariable=search_var).pack(fill="x", padx=16)
+
+        ttk.Label(popup, text="SO No").pack(pady=4)
+        so_no_var = tk.StringVar(value=opts.so_no)
+        ttk.Entry(popup, textvariable=so_no_var).pack(fill="x", padx=16)
 
         ttk.Label(popup, text="Satış Elemanı").pack(pady=4)
         salesman_var = tk.StringVar(value=opts.salesman)
@@ -1115,6 +1180,7 @@ class SalesEntryApp:
 
         def apply():
             self.filter_options.search_text = search_var.get().strip()
+            self.filter_options.so_no = so_no_var.get().strip()
             self.filter_options.salesman = salesman_var.get().strip()
             self.filter_options.invoiced = invoiced_var.get().strip()
             self.filter_options.start_date = self._parse_date_str(start_var.get())
