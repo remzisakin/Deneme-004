@@ -33,7 +33,7 @@ BACKUP_DIR = Path("backups")
 REPORT_DIR = Path("reports")
 AUTO_SAVE_INTERVAL = 5 * 60 * 1000  # 5 minutes in milliseconds
 PAGE_SIZE = 15
-FORM_BUTTON_WIDTH = 18
+FORM_BUTTON_WIDTH = 12
 
 COLUMNS = [
     "Date of Request",
@@ -236,7 +236,7 @@ class SalesEntryApp:
         style.configure(
             "Action.TButton",
             font=("Segoe UI", 11, "bold"),
-            padding=(12, 10),
+            padding=(10, 6),
             background=action_bg,
             foreground=action_fg,
         )
@@ -248,7 +248,7 @@ class SalesEntryApp:
         style.configure(
             "ActionPrimary.TButton",
             font=("Segoe UI", 11, "bold"),
-            padding=(12, 10),
+            padding=(10, 6),
             background=COLORS["primary"],
             foreground="white",
             borderwidth=0,
@@ -268,7 +268,7 @@ class SalesEntryApp:
         style.configure(
             "ActionAccent.TButton",
             font=("Segoe UI", 11, "bold"),
-            padding=(12, 10),
+            padding=(10, 6),
             background=COLORS["success"],
             foreground="white",
             borderwidth=0,
@@ -281,7 +281,7 @@ class SalesEntryApp:
         style.configure(
             "ActionDanger.TButton",
             font=("Segoe UI", 11, "bold"),
-            padding=(12, 10),
+            padding=(10, 6),
             background=COLORS["danger"],
             foreground="white",
             borderwidth=0,
@@ -435,7 +435,7 @@ class SalesEntryApp:
             command=self.undo_last_change,
         )
         self.undo_button.grid(row=0, column=2, sticky="ew", padx=4)
-        self.undo_button.configure(width=FORM_BUTTON_WIDTH)
+        self.undo_button.configure(width=6)
 
         self.redo_button = ttk.Button(
             top_action_frame,
@@ -444,7 +444,7 @@ class SalesEntryApp:
             command=self.redo_last_change,
         )
         self.redo_button.grid(row=0, column=3, sticky="ew", padx=4)
-        self.redo_button.configure(width=FORM_BUTTON_WIDTH)
+        self.redo_button.configure(width=6)
 
         def create_labeled_row(parent, label_text, widget_factory):
             """Create a labelled row and ensure the widget is packed correctly."""
