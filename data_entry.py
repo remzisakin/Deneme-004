@@ -44,7 +44,8 @@ COLUMNS = [
     "Definition",
     "Sales Ticket Reference",
     "SO No",
-    "PO No",
+    "PTD PO No",
+    "NON-EDI PO No",
     "Amount",
     "Total Discount",
     "CPI",
@@ -111,6 +112,9 @@ class SalesEntryApp:
         self.current_page = 1
         self.total_pages = 1
         self.selected_index: Optional[int] = None
+        self._new_entry_mode = False
+        self.history: List[pd.DataFrame] = []
+        self.redo_stack: List[pd.DataFrame] = []
         self.filter_options = FilterOptions()
         self._updating_cpi_field = False
         self._suspend_delivery_autofill = False
@@ -262,7 +266,7 @@ class SalesEntryApp:
         menubar.add_cascade(label="Dosya", menu=file_menu)
 
         edit_menu = tk.Menu(menubar, tearoff=0)
-        edit_menu.add_command(label="Yeni Kayıt", accelerator="Ctrl+N", command=self.reset_form)
+        edit_menu.add_command(label="Yeni Kayıt", accelerator="Ctrl+N", command=self.start_new_entry)
         edit_menu.add_command(label="Kaydı Düzenle", command=self.populate_form_from_selection)
         edit_menu.add_command(label="Kaydı Sil", command=self.delete_data)
         edit_menu.add_separator()
@@ -295,8 +299,12 @@ class SalesEntryApp:
 
         self.root.bind("<Control-s>", lambda event: self.save_data())
         self.root.bind("<Control-S>", lambda event: self.save_data())
-        self.root.bind("<Control-n>", lambda event: self.reset_form())
-        self.root.bind("<Control-N>", lambda event: self.reset_form())
+        self.root.bind("<Control-n>", self.start_new_entry)
+        self.root.bind("<Control-N>", self.start_new_entry)
+        self.root.bind("<Control-z>", lambda event: self.undo_last_change())
+        self.root.bind("<Control-Z>", lambda event: self.undo_last_change())
+        self.root.bind("<Control-y>", lambda event: self.redo_last_change())
+        self.root.bind("<Control-Y>", lambda event: self.redo_last_change())
         self.root.bind("<Control-f>", lambda event: self.open_filter_window())
         self.root.bind("<Control-F>", lambda event: self.open_filter_window())
         self.root.bind("<Control-q>", lambda event: self.root.quit())
@@ -316,6 +324,8 @@ class SalesEntryApp:
 
         self.form_frame = ttk.LabelFrame(self.content_frame, text="Veri Giriş Formu")
         self.form_frame.pack(side="left", fill="y", padx=(0, 8), pady=4)
+        self.form_frame.configure(width=420)
+        self.form_frame.pack_propagate(False)
 
         self.table_frame = ttk.LabelFrame(self.content_frame, text="Kayıtlı Veriler")
         self.table_frame.pack(side="right", fill="both", expand=True, pady=4)
@@ -394,7 +404,8 @@ class SalesEntryApp:
             ("Definition", "Ürün Tanımı"),
             ("Sales Ticket Reference", "SalesForce Ref"),
             ("SO No", "SO No"),
-            ("PO No", "PO No"),
+            ("PTD PO No", "PTD PO No"),
+            ("NON-EDI PO No", "NON-EDI PO No"),
         ]
         for field, label in text_fields:
             self.form_vars[field] = tk.StringVar()
@@ -470,19 +481,62 @@ class SalesEntryApp:
         # Aksiyon butonları
         btn_frame = ttk.Frame(self.form_frame)
         btn_frame.pack(fill="x", pady=(12, 0))
-        ttk.Button(btn_frame, text="Temizle", command=self.reset_form).pack(side="left", expand=True, fill="x", padx=2)
-        ttk.Button(btn_frame, text="Kaydet", style="Accent.TButton", command=self.save_data).pack(
+
+        top_btn_row = ttk.Frame(btn_frame)
+        top_btn_row.pack(fill="x")
+        ttk.Button(top_btn_row, text="Temizle", command=lambda: self.reset_form()).pack(
             side="left", expand=True, fill="x", padx=2
         )
-        ttk.Button(btn_frame, text="Sil", style="Danger.TButton", command=self.delete_data).pack(
-            side="left", expand=True, fill="x", padx=2
+        self.new_entry_button = ttk.Button(
+            top_btn_row,
+            text="Yeni Sipariş Verisi",
+            command=self.start_new_entry,
         )
-        ttk.Button(btn_frame, text="Güncelle", command=self.update_data).pack(side="left", expand=True, fill="x", padx=2)
+        self.new_entry_button.pack(side="left", expand=True, fill="x", padx=2)
+
+        bottom_btn_row = ttk.Frame(btn_frame)
+        bottom_btn_row.pack(fill="x", pady=(6, 0))
+        self.save_button = ttk.Button(
+            bottom_btn_row,
+            text="Kaydet",
+            style="Accent.TButton",
+            command=self.save_data,
+        )
+        self.save_button.pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(
+            bottom_btn_row,
+            text="Sil",
+            style="Danger.TButton",
+            command=self.delete_data,
+        ).pack(side="left", expand=True, fill="x", padx=2)
+        self.update_button = ttk.Button(
+            bottom_btn_row,
+            text="Güncelle",
+            command=self.update_data,
+        )
+        self.update_button.pack(side="left", expand=True, fill="x", padx=2)
+        self.undo_button = ttk.Button(
+            bottom_btn_row,
+            text="Geri Al",
+            command=self.undo_last_change,
+        )
+        self.undo_button.pack(side="left", expand=True, fill="x", padx=2)
+        self.redo_button = ttk.Button(
+            bottom_btn_row,
+            text="İleri Al",
+            command=self.redo_last_change,
+        )
+        self.redo_button.pack(side="left", expand=True, fill="x", padx=2)
+
+        self._update_button_states()
 
     def _create_table(self) -> None:
         columns = ["#", *COLUMNS]
+        tree_container = ttk.Frame(self.table_frame)
+        tree_container.pack(fill="both", expand=True)
+
         self.tree = ttk.Treeview(
-            self.table_frame,
+            tree_container,
             columns=columns,
             show="headings",
             style="Custom.Treeview",
@@ -504,9 +558,13 @@ class SalesEntryApp:
         self.tree.column("Definition", width=200, anchor="w")
         self.tree.column("Delivery Note", width=220, anchor="w")
 
-        scrollbar_y = ttk.Scrollbar(self.table_frame, orient="vertical", command=self.tree.yview)
+        scrollbar_y = ttk.Scrollbar(tree_container, orient="vertical", command=self.tree.yview)
         scrollbar_y.pack(side="right", fill="y")
         self.tree.configure(yscrollcommand=scrollbar_y.set)
+
+        scrollbar_x = ttk.Scrollbar(self.table_frame, orient="horizontal", command=self.tree.xview)
+        scrollbar_x.pack(fill="x")
+        self.tree.configure(xscrollcommand=scrollbar_x.set)
 
         self.tree.bind("<<TreeviewSelect>>", lambda event: self.populate_form_from_selection())
         self.tree.bind("<Button-3>", self._show_context_menu)
@@ -562,6 +620,74 @@ class SalesEntryApp:
     def _update_status(self, text: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.status_var.set(f"[{timestamp}] {text}")
+
+    def _push_history(self) -> None:
+        self.history.append(self.df.copy(deep=True))
+        if len(self.history) > 20:
+            self.history = self.history[-20:]
+        self.redo_stack.clear()
+        self._update_button_states()
+
+    def _clear_history(self) -> None:
+        self.history.clear()
+        self.redo_stack.clear()
+        self._update_button_states()
+
+    def _update_button_states(self) -> None:
+        if not hasattr(self, "save_button"):
+            return
+
+        if self._new_entry_mode and self.selected_index is None:
+            self.save_button.state(["!disabled"])
+        else:
+            self.save_button.state(["disabled"])
+
+        if self.selected_index is not None:
+            self.update_button.state(["!disabled"])
+        else:
+            self.update_button.state(["disabled"])
+
+        if self.history:
+            self.undo_button.state(["!disabled"])
+        else:
+            self.undo_button.state(["disabled"])
+
+        if self.redo_stack:
+            self.redo_button.state(["!disabled"])
+        else:
+            self.redo_button.state(["disabled"])
+
+    def start_new_entry(self, _event=None) -> None:
+        self._new_entry_mode = True
+        self.reset_form(preserve_new_mode=True)
+        self._update_status("Yeni kayıt için form hazırlandı")
+        self._update_button_states()
+
+    def undo_last_change(self) -> None:
+        if not self.history:
+            messagebox.showinfo("Bilgi", "Geri alınacak bir değişiklik yok")
+            return
+        self.redo_stack.append(self.df.copy(deep=True))
+        self.df = self.history.pop()
+        self.save_current_dataframe()
+        self.apply_filters()
+        self.reset_form()
+        self._update_status("Son değişiklik geri alındı")
+        self._update_button_states()
+
+    def redo_last_change(self) -> None:
+        if not self.redo_stack:
+            messagebox.showinfo("Bilgi", "İleri alınacak bir değişiklik yok")
+            return
+        self.history.append(self.df.copy(deep=True))
+        if len(self.history) > 20:
+            self.history = self.history[-20:]
+        self.df = self.redo_stack.pop()
+        self.save_current_dataframe()
+        self.apply_filters()
+        self.reset_form()
+        self._update_status("İleri alma işlemi uygulandı")
+        self._update_button_states()
 
     def set_theme(self, theme: str) -> None:
         self._config["theme"] = theme
@@ -775,6 +901,8 @@ class SalesEntryApp:
         except Exception as exc:
             messagebox.showerror("Hata", f"Veri yüklenemedi: {exc}")
             return
+        if "PO No" in self.df.columns and "PTD PO No" not in self.df.columns:
+            self.df = self.df.rename(columns={"PO No": "PTD PO No"})
         for column in COLUMNS:
             if column not in self.df.columns:
                 self.df[column] = ""
@@ -783,6 +911,7 @@ class SalesEntryApp:
             self.df = self.df.drop(columns=extra_columns)
         self.df = self.df[COLUMNS]
         self._normalise_discount_values()
+        self._clear_history()
         self.apply_filters()
         self._update_status("Veri yüklendi")
 
@@ -954,7 +1083,7 @@ class SalesEntryApp:
         self.update_table(self.get_filtered_dataframe())
 
     # --------------------------------------------------------------- form logic
-    def reset_form(self) -> None:
+    def reset_form(self, _event=None, *, preserve_new_mode: bool = False) -> None:
         for key, var in self.form_vars.items():
             if isinstance(var, tk.StringVar):
                 if key in ("QI Forecast", "Invoiced"):
@@ -980,7 +1109,10 @@ class SalesEntryApp:
         self._set_date_field("Date of Delivery", delivery_date)
         self._suspend_delivery_autofill = False
         self._update_cpi_field()
+        if not preserve_new_mode:
+            self._new_entry_mode = False
         self._update_status("Form temizlendi")
+        self._update_button_states()
 
     def populate_form_from_selection(self) -> None:
         selected = self.tree.selection()
@@ -1041,6 +1173,8 @@ class SalesEntryApp:
             row_index = None
         self.selected_index = row_index
         self._update_status("Kayıt düzenleme için yüklendi")
+        self._new_entry_mode = False
+        self._update_button_states()
 
     def _format_value(self, value) -> str:
         if pd.isna(value):
@@ -1171,16 +1305,38 @@ class SalesEntryApp:
         return pd.Series(data), None
 
     def save_data(self) -> None:
+        if not self._new_entry_mode:
+            messagebox.showwarning(
+                "Yeni Kayıt Gerekli",
+                "Yeni veri eklemek için önce 'Yeni Sipariş Verisi' butonuna tıklayınız.",
+            )
+            return
+        if self.selected_index is not None:
+            messagebox.showwarning(
+                "Yeni Kayıt", "Kayıtlı bir veri seçiliyken yeni kayıt ekleyemezsiniz."
+            )
+            return
         record, error = self._collect_form_data()
         if error:
             messagebox.showerror("Geçersiz Veri", error)
             return
         assert record is not None
 
+        confirm = messagebox.askyesno(
+            "Onay",
+            "Yeni veri girişini onaylıyor musunuz?",
+            parent=self.root,
+        )
+        if not confirm:
+            return
+
+        self._push_history()
+
         self.df = pd.concat([self.df, record.to_frame().T], ignore_index=True)
         self.save_current_dataframe()
         self.apply_filters()
         self.reset_form()
+        self._update_button_states()
         messagebox.showinfo("Başarılı", "Kayıt eklendi")
 
     def update_data(self) -> None:
@@ -1192,10 +1348,19 @@ class SalesEntryApp:
             messagebox.showerror("Geçersiz Veri", error)
             return
         assert record is not None
+        confirm = messagebox.askyesno(
+            "Onay",
+            "Seçili kaydı güncellemek istediğinize emin misiniz?",
+            parent=self.root,
+        )
+        if not confirm:
+            return
+        self._push_history()
         self.df.loc[self.selected_index, record.index] = record.values
         self.save_current_dataframe()
         self.apply_filters()
         self.reset_form()
+        self._update_button_states()
         messagebox.showinfo("Güncellendi", "Kayıt başarıyla güncellendi")
 
     def delete_data(self) -> None:
@@ -1213,11 +1378,13 @@ class SalesEntryApp:
             return
         item = self.tree.item(selected[0])
         index = int(item["values"][0]) - 1
+        self._push_history()
         self.df = self.df.drop(self.df.index[index]).reset_index(drop=True)
         self.save_current_dataframe()
         self.apply_filters()
         self.reset_form()
         self._update_status("Kayıt silindi")
+        self._update_button_states()
 
     def copy_selected_row(self) -> None:
         selected = self.tree.selection()
