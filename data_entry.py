@@ -57,7 +57,7 @@ COLUMNS = [
 
 DEFAULT_SALES_REPS = ["Fatih Aykut", "Ridvan Yasar", "Rami Sakin"]
 OTHER_SALES_REP_OPTION = "Diğer..."
-SALES_REP_PASSWORD = "Remzi123"
+DEFAULT_SALES_REP_PASSWORD = "Remzi123"
 DEFAULT_THEME = "light"
 THEMES = {"light": "Açık", "dark": "Koyu"}
 
@@ -117,6 +117,9 @@ class SalesEntryApp:
 
         self._config = self._load_config()
         self.sales_reps = self._load_sales_reps()
+        self.sales_rep_password = self._config.get(
+            "sales_rep_password", DEFAULT_SALES_REP_PASSWORD
+        )
         self._apply_theme(self._config.get("theme", DEFAULT_THEME))
 
         self._ensure_directories()
@@ -137,24 +140,40 @@ class SalesEntryApp:
     # ------------------------------------------------------------------ setup
     def _load_config(self) -> Dict[str, object]:
         if not os.path.exists(CONFIG_FILE):
-            config = {"theme": DEFAULT_THEME, "sales_reps": DEFAULT_SALES_REPS}
+            config = {
+                "theme": DEFAULT_THEME,
+                "sales_reps": DEFAULT_SALES_REPS,
+                "sales_rep_password": DEFAULT_SALES_REP_PASSWORD,
+            }
             self._save_config(config)
             return config
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as fh:
                 config = json.load(fh)
         except (json.JSONDecodeError, OSError):
-            config = {"theme": DEFAULT_THEME, "sales_reps": DEFAULT_SALES_REPS}
+            config = {
+                "theme": DEFAULT_THEME,
+                "sales_reps": DEFAULT_SALES_REPS,
+                "sales_rep_password": DEFAULT_SALES_REP_PASSWORD,
+            }
         if "theme" not in config:
             config["theme"] = DEFAULT_THEME
         sales_reps = config.get("sales_reps")
         if not isinstance(sales_reps, list) or not all(isinstance(item, str) for item in sales_reps):
             config["sales_reps"] = DEFAULT_SALES_REPS.copy()
+        password = config.get("sales_rep_password")
+        if not isinstance(password, str) or not password.strip():
+            config["sales_rep_password"] = DEFAULT_SALES_REP_PASSWORD
         return config
 
     def _save_config(self, config: Dict[str, object]) -> None:
         with open(CONFIG_FILE, "w", encoding="utf-8") as fh:
             json.dump(config, fh, indent=2, ensure_ascii=False)
+
+    def _update_sales_rep_password(self, new_password: str) -> None:
+        self.sales_rep_password = new_password
+        self._config["sales_rep_password"] = new_password
+        self._save_config(self._config)
 
     def _load_sales_reps(self) -> List[str]:
         reps = self._config.get("sales_reps", DEFAULT_SALES_REPS)
@@ -376,7 +395,6 @@ class SalesEntryApp:
             ("Sales Ticket Reference", "SalesForce Ref"),
             ("SO No", "SO No"),
             ("PO No", "PO No"),
-            ("Delivery Note", "Notlar"),
         ]
         for field, label in text_fields:
             self.form_vars[field] = tk.StringVar()
@@ -417,6 +435,13 @@ class SalesEntryApp:
             ),
         )
 
+        self.form_vars["Delivery Note"] = tk.StringVar()
+        notes_row = ttk.Frame(self.form_frame)
+        notes_row.pack(fill="both", pady=3)
+        ttk.Label(notes_row, text="Notlar", width=22).pack(side="left", anchor="n")
+        self.notes_text = tk.Text(notes_row, height=3, wrap="word", font=("Segoe UI", 10))
+        self.notes_text.pack(side="left", fill="both", expand=True)
+
         self.discount_entry.bind("<FocusIn>", self._on_discount_focus_in)
         self.discount_entry.bind("<FocusOut>", self._format_discount_entry)
         self.form_vars["Amount"].trace_add("write", lambda *args: self._update_cpi_field())
@@ -447,6 +472,9 @@ class SalesEntryApp:
         btn_frame.pack(fill="x", pady=(12, 0))
         ttk.Button(btn_frame, text="Temizle", command=self.reset_form).pack(side="left", expand=True, fill="x", padx=2)
         ttk.Button(btn_frame, text="Kaydet", style="Accent.TButton", command=self.save_data).pack(
+            side="left", expand=True, fill="x", padx=2
+        )
+        ttk.Button(btn_frame, text="Sil", style="Danger.TButton", command=self.delete_data).pack(
             side="left", expand=True, fill="x", padx=2
         )
         ttk.Button(btn_frame, text="Güncelle", command=self.update_data).pack(side="left", expand=True, fill="x", padx=2)
@@ -562,7 +590,7 @@ class SalesEntryApp:
         )
         if password is None:
             return
-        if password != SALES_REP_PASSWORD:
+        if password != self.sales_rep_password:
             messagebox.showerror("Yetkisiz İşlem", "Şifre hatalı")
             return
 
@@ -651,6 +679,49 @@ class SalesEntryApp:
             side="left", expand=True, padx=4
         )
 
+        def change_password() -> None:
+            current = simpledialog.askstring(
+                "Şifreyi Değiştir",
+                "Mevcut şifreyi giriniz",
+                show="*",
+                parent=window,
+            )
+            if current is None:
+                return
+            if current != self.sales_rep_password:
+                messagebox.showerror("Hata", "Mevcut şifre yanlış", parent=window)
+                return
+            new_password = simpledialog.askstring(
+                "Şifreyi Değiştir",
+                "Yeni şifreyi giriniz",
+                show="*",
+                parent=window,
+            )
+            if new_password is None:
+                return
+            new_password = new_password.strip()
+            if not new_password:
+                messagebox.showinfo("Bilgi", "Şifre değişmedi", parent=window)
+                return
+            confirm_password = simpledialog.askstring(
+                "Şifreyi Değiştir",
+                "Yeni şifreyi tekrar giriniz",
+                show="*",
+                parent=window,
+            )
+            if confirm_password is None:
+                return
+            confirm_password = confirm_password.strip()
+            if new_password != confirm_password:
+                messagebox.showerror(
+                    "Hata", "Yeni şifreler eşleşmiyor", parent=window
+                )
+                return
+            self._update_sales_rep_password(new_password)
+            messagebox.showinfo(
+                "Başarılı", "Şifre güncellendi", parent=window
+            )
+
         def save_and_close() -> None:
             raw_reps = [listbox.get(i) for i in range(listbox.size())]
             unique_reps: List[str] = []
@@ -674,6 +745,11 @@ class SalesEntryApp:
 
         action_frame = ttk.Frame(window)
         action_frame.pack(fill="x", padx=16, pady=(8, 12))
+        ttk.Button(
+            action_frame,
+            text="Şifreyi Değiştir",
+            command=change_password,
+        ).pack(side="left", expand=True, fill="x", padx=4)
         ttk.Button(action_frame, text="Kaydet", style="Accent.TButton", command=save_and_close).pack(
             side="left", expand=True, fill="x", padx=4
         )
@@ -890,6 +966,10 @@ class SalesEntryApp:
                     continue
                 else:
                     var.set("")
+        if hasattr(self, "notes_text"):
+            self.notes_text.delete("1.0", "end")
+            if "Delivery Note" in self.form_vars:
+                self.form_vars["Delivery Note"].set("")
         self.selected_index = None
         self.tree.selection_remove(self.tree.selection())
         today = datetime.today()
@@ -928,6 +1008,15 @@ class SalesEntryApp:
                         self._set_date_field(col, dt)
                     except Exception:
                         self.form_vars[col].set(value)
+                elif col == "Delivery Note":
+                    if value is None or pd.isna(value):
+                        text_value = ""
+                    else:
+                        text_value = str(value)
+                    self.form_vars[col].set(text_value)
+                    if hasattr(self, "notes_text"):
+                        self.notes_text.delete("1.0", "end")
+                        self.notes_text.insert("1.0", text_value)
                 elif col in self.form_vars:
                     self.form_vars[col].set(str(value) if value is not None else "")
         finally:
@@ -1020,6 +1109,11 @@ class SalesEntryApp:
         data: Dict[str, object] = {}
         errors: List[str] = []
 
+        if hasattr(self, "notes_text"):
+            self.form_vars["Delivery Note"].set(
+                self.notes_text.get("1.0", "end").strip()
+            )
+
         for column in COLUMNS:
             if column in ("Total Discount", "CPI"):
                 # computed later
@@ -1109,7 +1203,13 @@ class SalesEntryApp:
         if not selected:
             messagebox.showwarning("Seçim Yok", "Silmek için kayıt seçiniz")
             return
-        if not messagebox.askyesno("Onay", "Seçili kayıt silinsin mi?"):
+        confirm = messagebox.askyesno(
+            "Emin misiniz?",
+            "Seçili kaydı silmek istediğinize emin misiniz? Bu işlem geri alınamaz.",
+            parent=self.root,
+            icon="warning",
+        )
+        if not confirm:
             return
         item = self.tree.item(selected[0])
         index = int(item["values"][0]) - 1
