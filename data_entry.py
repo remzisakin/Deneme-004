@@ -14,6 +14,7 @@ import threading
 import tkinter as tk
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import partial
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -89,6 +90,8 @@ REQUIRED_FIELDS = {
 }
 
 FLOAT_FIELDS = {"Amount", "Total Discount", "CPI", "CPS", "Invoiced Amount"}
+
+CURRENCY_FIELDS = {"Amount", "CPS", "CPI", "Invoiced Amount"}
 
 
 @dataclass
@@ -403,6 +406,7 @@ class SalesEntryApp:
     def _create_form(self) -> None:
         self.form_vars: Dict[str, tk.Variable] = {}
         self.date_entries: Dict[str, DateEntry] = {}
+        self._form_widgets: List[Tuple[tk.Widget, str]] = []
 
         # Üst kısımda yer alan aksiyon butonları
         top_action_frame = ttk.Frame(self.form_frame)
@@ -456,6 +460,7 @@ class SalesEntryApp:
             widget = widget_factory(row)
             if isinstance(widget, tk.Widget):
                 widget.pack(side="left", fill="x", expand=True)
+                self._register_form_widget(widget)
             return widget
 
         today = datetime.today()
@@ -538,6 +543,8 @@ class SalesEntryApp:
             "Tutar (€)",
             lambda parent: ttk.Entry(parent, textvariable=self.form_vars["Amount"]),
         )
+        self.amount_entry.bind("<FocusIn>", lambda _event: self._on_currency_focus_in("Amount"))
+        self.amount_entry.bind("<FocusOut>", lambda _event: self._format_currency_entry("Amount"))
         self.discount_entry = create_labeled_row(
             self.form_frame,
             "İndirim (%)",
@@ -548,6 +555,8 @@ class SalesEntryApp:
             "CPS (€)",
             lambda parent: ttk.Entry(parent, textvariable=self.form_vars["CPS"]),
         )
+        self.cps_entry.bind("<FocusIn>", lambda _event: self._on_currency_focus_in("CPS"))
+        self.cps_entry.bind("<FocusOut>", lambda _event: self._format_currency_entry("CPS"))
         self.cpi_total_entry = create_labeled_row(
             self.form_frame,
             "CPI Tutarı (€)",
@@ -564,6 +573,7 @@ class SalesEntryApp:
         ttk.Label(notes_row, text="Notlar", width=22).pack(side="left", anchor="n")
         self.notes_text = tk.Text(notes_row, height=2, wrap="word", font=("Segoe UI", 10))
         self.notes_text.pack(side="left", fill="both", expand=True)
+        self._register_form_widget(self.notes_text)
 
         self.discount_entry.bind("<FocusIn>", self._on_discount_focus_in)
         self.discount_entry.bind("<FocusOut>", self._format_discount_entry)
@@ -580,12 +590,14 @@ class SalesEntryApp:
             container.pack(fill="x", pady=3)
             ttk.Label(container, text=label_text, width=22).pack(side="left")
             for choice in ("YES", "NO"):
-                ttk.Radiobutton(
+                radio = ttk.Radiobutton(
                     container,
                     text=choice,
                     value=choice,
                     variable=self.form_vars[var_name],
-                ).pack(side="left", padx=2)
+                )
+                radio.pack(side="left", padx=2)
+                self._register_form_widget(radio)
 
         create_radio("QI Forecast", "QI Forecast")
         create_radio("Faturalandi", "Invoiced")
@@ -618,7 +630,35 @@ class SalesEntryApp:
             command=self.reset_form,
         ).grid(row=0, column=2, sticky="ew", padx=4, pady=4)
 
+        self._apply_form_state()
         self._update_button_states()
+
+    def _register_form_widget(self, widget: tk.Widget) -> None:
+        if widget is None:
+            return
+        try:
+            state = widget.cget("state")
+        except tk.TclError:
+            state = "normal"
+        if not state:
+            state = "normal"
+        if not hasattr(self, "_form_widgets"):
+            self._form_widgets = []
+        self._form_widgets.append((widget, state))
+
+    def _set_form_state(self, enabled: bool) -> None:
+        self._form_enabled = enabled
+        for widget, default_state in getattr(self, "_form_widgets", []):
+            state_to_use = default_state if enabled else "disabled"
+            if isinstance(widget, tk.Text):
+                widget.configure(state="normal")
+                widget.configure(state=state_to_use if enabled else "disabled")
+            else:
+                widget.configure(state=state_to_use)
+
+    def _apply_form_state(self) -> None:
+        should_enable = self._new_entry_mode or self.selected_index is not None
+        self._set_form_state(should_enable)
 
     def _create_table(self) -> None:
         columns = ["#", *COLUMNS]
@@ -1072,11 +1112,10 @@ class SalesEntryApp:
         updated = False
         for idx, row in self.df.iterrows():
             discount_raw = self._to_float(row.get("Total Discount"))
-            amount = self._to_float(row.get("Amount"))
-            cps_value = self._to_float(row.get("CPS")) or 0.0
 
             if discount_raw is not None:
                 if discount_raw > 1:
+                    amount = self._to_float(row.get("Amount"))
                     if amount:
                         fraction = discount_raw / amount
                     else:
@@ -1086,17 +1125,6 @@ class SalesEntryApp:
                 fraction = max(0.0, min(fraction, 1.0))
                 if discount_raw != fraction:
                     self.df.at[idx, "Total Discount"] = fraction
-                    updated = True
-
-            if amount is not None:
-                expected_cpi = amount - cps_value
-                current_cpi = self._to_float(row.get("CPI"))
-                if current_cpi is None or abs(current_cpi - expected_cpi) > 0.005:
-                    self.df.at[idx, "CPI"] = expected_cpi
-                    updated = True
-                invoiced_amount = self._to_float(row.get("Invoiced Amount"))
-                if invoiced_amount is None or abs(invoiced_amount - expected_cpi) > 0.005:
-                    self.df.at[idx, "Invoiced Amount"] = expected_cpi
                     updated = True
         if updated:
             self._update_status("İndirim verileri güncellendi")
@@ -1188,6 +1216,8 @@ class SalesEntryApp:
             for col in COLUMNS:
                 if col == "Total Discount":
                     formatted_values.append(self._format_discount_fraction(row[col]))
+                elif col in CURRENCY_FIELDS:
+                    formatted_values.append(self._format_currency(row[col]))
                 else:
                     formatted_values.append(self._format_value(row[col]))
             values = [idx] + formatted_values
@@ -1250,6 +1280,7 @@ class SalesEntryApp:
                 else:
                     var.set("")
         if hasattr(self, "notes_text"):
+            self.notes_text.configure(state="normal")
             self.notes_text.delete("1.0", "end")
             if "Delivery Note" in self.form_vars:
                 self.form_vars["Delivery Note"].set("")
@@ -1266,6 +1297,7 @@ class SalesEntryApp:
         if not preserve_new_mode:
             self._new_entry_mode = False
         self._update_status("Form temizlendi")
+        self._apply_form_state()
         self._update_button_states()
 
     def populate_form_from_selection(self) -> None:
@@ -1277,6 +1309,8 @@ class SalesEntryApp:
         if len(values) != len(COLUMNS):
             return
         row_data = dict(zip(COLUMNS, values))
+        if hasattr(self, "notes_text"):
+            self.notes_text.configure(state="normal")
         self._suspend_delivery_autofill = True
         try:
             for col, value in row_data.items():
@@ -1303,6 +1337,8 @@ class SalesEntryApp:
                     if hasattr(self, "notes_text"):
                         self.notes_text.delete("1.0", "end")
                         self.notes_text.insert("1.0", text_value)
+                elif col in CURRENCY_FIELDS and col in self.form_vars:
+                    self.form_vars[col].set(self._format_currency(value))
                 elif col in self.form_vars:
                     self.form_vars[col].set(str(value) if value is not None else "")
         finally:
@@ -1328,7 +1364,46 @@ class SalesEntryApp:
         self.selected_index = row_index
         self._update_status("Kayıt düzenleme için yüklendi")
         self._new_entry_mode = False
+        self._apply_form_state()
         self._update_button_states()
+
+    def _normalise_currency_value(self, value) -> Optional[Decimal]:
+        if isinstance(value, Decimal):
+            target = value
+        else:
+            numeric = self._to_float(value)
+            if numeric is None:
+                return None
+            target = Decimal(str(numeric))
+        try:
+            return target.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        except (InvalidOperation, ValueError):
+            return None
+
+    def _format_currency(self, value) -> str:
+        normalised = self._normalise_currency_value(value)
+        if normalised is None:
+            return ""
+        formatted = f"{normalised:.2f}".replace(".", ",")
+        return f"{formatted} €"
+
+    def _on_currency_focus_in(self, field: str) -> None:
+        value = self.form_vars[field].get().strip()
+        if value.endswith("€"):
+            self.form_vars[field].set(value[:-1].strip())
+
+    def _format_currency_entry(self, field: str) -> None:
+        raw_value = self.form_vars[field].get()
+        amount = self._parse_float(raw_value)
+        if amount is None:
+            cleaned = raw_value.strip()
+            if cleaned.endswith("€"):
+                cleaned = cleaned[:-1].strip()
+            if not cleaned:
+                self.form_vars[field].set("")
+            return
+        formatted = self._format_currency(amount)
+        self.form_vars[field].set(formatted)
 
     def _format_value(self, value) -> str:
         if pd.isna(value):
@@ -1374,15 +1449,26 @@ class SalesEntryApp:
             return
         self._updating_cpi_field = True
         try:
-            amount = self._parse_float(self.form_vars["Amount"].get())
+            amount_value = self._parse_float(self.form_vars["Amount"].get())
             cps_value = self._parse_float(self.form_vars["CPS"].get())
-            if amount is None:
+            if amount_value is None:
                 self.form_vars["Invoiced Amount"].set("")
                 return
-            cps = cps_value or 0.0
-            cpi_total = amount - cps
-            formatted = f"{cpi_total:.2f}".replace(".", ",")
-            self.form_vars["Invoiced Amount"].set(formatted)
+            amount_decimal = self._normalise_currency_value(amount_value)
+            cps_decimal = (
+                self._normalise_currency_value(cps_value)
+                if cps_value is not None
+                else Decimal("0")
+            )
+            if amount_decimal is None:
+                self.form_vars["Invoiced Amount"].set("")
+                return
+            if cps_decimal is None:
+                cps_decimal = Decimal("0")
+            cpi_total = (amount_decimal - cps_decimal).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            self.form_vars["Invoiced Amount"].set(self._format_currency(cpi_total))
         finally:
             self._updating_cpi_field = False
 
@@ -1414,9 +1500,12 @@ class SalesEntryApp:
                 errors.append(f"{column} boş bırakılamaz")
             data[column] = value
 
-        amount = self._parse_float(self.form_vars["Amount"].get())
-        if amount is None:
+        amount_raw = self._parse_float(self.form_vars["Amount"].get())
+        amount_decimal = self._normalise_currency_value(amount_raw)
+        if amount_decimal is None:
             errors.append("Geçerli bir tutar girin")
+        else:
+            self.form_vars["Amount"].set(self._format_currency(amount_decimal))
         discount_percent_value = self._parse_float(self.form_vars["DiscountPercent"].get()) or 0.0
         self._format_discount_entry()
         if discount_percent_value < 0:
@@ -1424,19 +1513,27 @@ class SalesEntryApp:
         discount_fraction = discount_percent_value / 100
         if discount_fraction > 1:
             errors.append("İndirim 100%'ü aşamaz")
-        cps_value = self._parse_float(self.form_vars["CPS"].get()) or 0.0
+        cps_raw = self._parse_float(self.form_vars["CPS"].get())
+        cps_decimal = self._normalise_currency_value(cps_raw)
+        if cps_decimal is None:
+            cps_decimal = Decimal("0")
+        else:
+            if cps_raw is not None:
+                self.form_vars["CPS"].set(self._format_currency(cps_decimal))
 
         if errors:
             return None, "\n".join(errors)
 
         discount_fraction = max(0.0, min(discount_fraction, 1.0))
-        cpi_total = amount - cps_value
+        amount_decimal = amount_decimal or Decimal("0")
+        cpi_total = (amount_decimal - cps_decimal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        self.form_vars["Invoiced Amount"].set(self._format_currency(cpi_total))
 
-        data["Amount"] = amount
+        data["Amount"] = float(amount_decimal)
         data["Total Discount"] = discount_fraction
-        data["CPI"] = cpi_total
-        data["CPS"] = cps_value
-        data["Invoiced Amount"] = cpi_total
+        data["CPI"] = float(cpi_total)
+        data["CPS"] = float(cps_decimal)
+        data["Invoiced Amount"] = float(cpi_total)
         data["QI Forecast"] = data["QI Forecast"].upper() if data["QI Forecast"] else "NO"
         data["Invoiced"] = data["Invoiced"].upper() if data["Invoiced"] else "NO"
 
