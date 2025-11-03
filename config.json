@@ -1,3 +1,8 @@
 {
-  "theme": "light"
+  "theme": "light",
+  "sales_reps": [
+    "Fatih Aykut",
+    "Ridvan Yasar",
+    "Rami Sakin"
+  ]
 }

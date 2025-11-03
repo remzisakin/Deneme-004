@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -56,7 +56,9 @@ COLUMNS = [
     "Invoiced Amount",
 ]
 
-SALES_REPS = ["Fatih Aykut", "Ridvan Yasar", "Rami Sakin", "Diğer..."]
+DEFAULT_SALES_REPS = ["Fatih Aykut", "Ridvan Yasar", "Rami Sakin"]
+OTHER_SALES_REP_OPTION = "Diğer..."
+SALES_REP_PASSWORD = "Remzi123"
 DEFAULT_THEME = "light"
 THEMES = {"light": "Açık", "dark": "Koyu"}
 
@@ -113,6 +115,7 @@ class SalesEntryApp:
         self._updating_cpi_field = False
 
         self._config = self._load_config()
+        self.sales_reps = self._load_sales_reps()
         self._apply_theme(self._config.get("theme", DEFAULT_THEME))
 
         self._ensure_directories()
@@ -131,20 +134,40 @@ class SalesEntryApp:
         self.schedule_auto_backup()
 
     # ------------------------------------------------------------------ setup
-    def _load_config(self) -> Dict[str, str]:
+    def _load_config(self) -> Dict[str, object]:
         if not os.path.exists(CONFIG_FILE):
-            config = {"theme": DEFAULT_THEME}
+            config = {"theme": DEFAULT_THEME, "sales_reps": DEFAULT_SALES_REPS}
             self._save_config(config)
             return config
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as fh:
-                return json.load(fh)
+                config = json.load(fh)
         except (json.JSONDecodeError, OSError):
-            return {"theme": DEFAULT_THEME}
+            config = {"theme": DEFAULT_THEME, "sales_reps": DEFAULT_SALES_REPS}
+        if "theme" not in config:
+            config["theme"] = DEFAULT_THEME
+        sales_reps = config.get("sales_reps")
+        if not isinstance(sales_reps, list) or not all(isinstance(item, str) for item in sales_reps):
+            config["sales_reps"] = DEFAULT_SALES_REPS.copy()
+        return config
 
-    def _save_config(self, config: Dict[str, str]) -> None:
+    def _save_config(self, config: Dict[str, object]) -> None:
         with open(CONFIG_FILE, "w", encoding="utf-8") as fh:
             json.dump(config, fh, indent=2, ensure_ascii=False)
+
+    def _load_sales_reps(self) -> List[str]:
+        reps = self._config.get("sales_reps", DEFAULT_SALES_REPS)
+        cleaned = [rep.strip() for rep in reps if isinstance(rep, str) and rep.strip()]
+        if not cleaned:
+            cleaned = DEFAULT_SALES_REPS.copy()
+        return cleaned
+
+    def _save_sales_reps(self) -> None:
+        self._config["sales_reps"] = self.sales_reps
+        self._save_config(self._config)
+
+    def _get_sales_rep_options(self) -> List[str]:
+        return [*self.sales_reps, OTHER_SALES_REP_OPTION]
 
     def _apply_theme(self, theme: str) -> None:
         if theme == "dark":
@@ -323,12 +346,15 @@ class SalesEntryApp:
             create_labeled_row(self.form_frame, date_labels[field], widget_factory)
 
         # Satış bilgileri
-        self.form_vars["Sales Man"] = tk.StringVar(value=SALES_REPS[0])
+        salesman_options = self._get_sales_rep_options()
+        default_salesman = salesman_options[0] if salesman_options else ""
+        self.form_vars["Sales Man"] = tk.StringVar(value=default_salesman)
+
         def salesman_factory(parent: tk.Widget) -> ttk.Combobox:
             combo = ttk.Combobox(
                 parent,
                 textvariable=self.form_vars["Sales Man"],
-                values=SALES_REPS,
+                values=self._get_sales_rep_options(),
                 state="readonly",
             )
             return combo
@@ -458,6 +484,7 @@ class SalesEntryApp:
         top_buttons = ttk.Frame(self.header_frame)
         top_buttons.pack(side="right", padx=(0, 12))
         ttk.Button(top_buttons, text="Ara / Filtrele", command=self.open_filter_window).pack(side="left", padx=4)
+        ttk.Button(top_buttons, text="Satış Elemanları", command=self.open_sales_rep_manager).pack(side="left", padx=4)
         ttk.Button(top_buttons, text="Dışa Aktar", command=self.export_filtered_data).pack(side="left", padx=4)
 
     def _create_bottom_buttons(self) -> None:
@@ -478,16 +505,107 @@ class SalesEntryApp:
         self._save_config(self._config)
         self._apply_theme(theme)
 
-    def _handle_salesman_selection(self, event) -> None:
-        if self.form_vars["Sales Man"].get() == "Diğer...":
-            new_name = tk.simpledialog.askstring("Yeni Satış Elemanı", "İsim giriniz")
+    def _handle_salesman_selection(self, _event) -> None:
+        if self.form_vars["Sales Man"].get() == OTHER_SALES_REP_OPTION:
+            new_name = simpledialog.askstring("Yeni Satış Elemanı", "İsim giriniz", parent=self.root)
             if new_name:
-                if new_name not in SALES_REPS:
-                    SALES_REPS.insert(-1, new_name)
-                self.salesman_combo.config(values=SALES_REPS)
-                self.form_vars["Sales Man"].set(new_name)
-            else:
-                self.form_vars["Sales Man"].set(SALES_REPS[0])
+                new_name = new_name.strip()
+                if new_name and new_name not in self.sales_reps:
+                    self.sales_reps.append(new_name)
+                    self._save_sales_reps()
+                if new_name:
+                    self.salesman_combo.config(values=self._get_sales_rep_options())
+                    self.form_vars["Sales Man"].set(new_name)
+                    return
+            options = self._get_sales_rep_options()
+            if options:
+                self.form_vars["Sales Man"].set(options[0])
+
+    def open_sales_rep_manager(self) -> None:
+        password = simpledialog.askstring(
+            "Satış Elemanları", "Şifreyi giriniz", show="*", parent=self.root
+        )
+        if password is None:
+            return
+        if password != SALES_REP_PASSWORD:
+            messagebox.showerror("Yetkisiz İşlem", "Şifre hatalı")
+            return
+
+        if hasattr(self, "_sales_rep_window") and self._sales_rep_window.winfo_exists():
+            self._sales_rep_window.lift()
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title("Satış Elemanları")
+        window.geometry("360x400")
+        window.transient(self.root)
+        window.grab_set()
+        self._sales_rep_window = window
+
+        ttk.Label(window, text="Satış Mühendisi Listesi", style="Header.TLabel").pack(pady=(12, 8))
+
+        listbox = tk.Listbox(window, height=12, selectmode="extended")
+        listbox.pack(fill="both", expand=True, padx=16)
+        for rep in self.sales_reps:
+            listbox.insert("end", rep)
+
+        entry_frame = ttk.Frame(window)
+        entry_frame.pack(fill="x", padx=16, pady=8)
+        ttk.Label(entry_frame, text="Yeni İsim").pack(anchor="w")
+        new_rep_var = tk.StringVar()
+        ttk.Entry(entry_frame, textvariable=new_rep_var).pack(fill="x", pady=(2, 0))
+
+        def add_rep() -> None:
+            name = new_rep_var.get().strip()
+            if not name:
+                return
+            if name in listbox.get(0, "end"):
+                messagebox.showinfo("Bilgi", "Bu isim zaten listede", parent=window)
+                return
+            listbox.insert("end", name)
+            new_rep_var.set("")
+
+        def remove_selected() -> None:
+            selected = listbox.curselection()
+            if not selected:
+                return
+            for index in reversed(selected):
+                listbox.delete(index)
+
+        button_frame = ttk.Frame(window)
+        button_frame.pack(fill="x", padx=16, pady=4)
+        ttk.Button(button_frame, text="Ekle", command=add_rep).pack(side="left", expand=True, padx=4)
+        ttk.Button(button_frame, text="Sil", command=remove_selected).pack(side="left", expand=True, padx=4)
+
+        def save_and_close() -> None:
+            raw_reps = [listbox.get(i) for i in range(listbox.size())]
+            unique_reps: List[str] = []
+            for rep in raw_reps:
+                cleaned = rep.strip()
+                if cleaned and cleaned not in unique_reps:
+                    unique_reps.append(cleaned)
+            self.sales_reps = unique_reps
+            self._save_sales_reps()
+            options = self._get_sales_rep_options()
+            self.salesman_combo.config(values=options)
+            current = self.form_vars["Sales Man"].get()
+            if current not in options:
+                self.form_vars["Sales Man"].set(options[0] if options else "")
+            if self.filter_options.salesman and self.filter_options.salesman not in self.sales_reps:
+                self.filter_options.salesman = ""
+            window.destroy()
+
+        def cancel() -> None:
+            window.destroy()
+
+        action_frame = ttk.Frame(window)
+        action_frame.pack(fill="x", padx=16, pady=(8, 12))
+        ttk.Button(action_frame, text="Kaydet", style="Accent.TButton", command=save_and_close).pack(
+            side="left", expand=True, fill="x", padx=4
+        )
+        ttk.Button(action_frame, text="İptal", command=cancel).pack(
+            side="left", expand=True, fill="x", padx=4
+        )
 
     def _show_context_menu(self, event) -> None:
         menu = tk.Menu(self.root, tearoff=0)
@@ -507,6 +625,7 @@ class SalesEntryApp:
         except Exception as exc:
             messagebox.showerror("Hata", f"Veri yüklenemedi: {exc}")
             return
+        self._normalise_discount_values()
         self.apply_filters()
         self._update_status("Veri yüklendi")
 
@@ -516,6 +635,31 @@ class SalesEntryApp:
             self._update_status("Dosya kaydedildi")
         except Exception as exc:
             messagebox.showerror("Kaydetme Hatası", str(exc))
+
+    def _normalise_discount_values(self) -> None:
+        if "Total Discount" not in self.df.columns:
+            return
+        updated = False
+        for idx, row in self.df.iterrows():
+            discount_raw = self._to_float(row.get("Total Discount"))
+            if discount_raw is None:
+                continue
+            amount = self._to_float(row.get("Amount"))
+            if discount_raw > 1:
+                if amount:
+                    fraction = discount_raw / amount
+                else:
+                    fraction = discount_raw / 100
+            else:
+                fraction = discount_raw
+            fraction = max(0.0, min(fraction, 1.0))
+            if discount_raw != fraction:
+                self.df.at[idx, "Total Discount"] = fraction
+                if amount is not None:
+                    self.df.at[idx, "CPI"] = amount * (1 - fraction)
+                updated = True
+        if updated:
+            self._update_status("İndirim verileri güncellendi")
 
     def save_as(self) -> None:
         filename = filedialog.asksaveasfilename(
@@ -600,7 +744,13 @@ class SalesEntryApp:
         page_df = df.iloc[start:end]
 
         for idx, (_, row) in enumerate(page_df.iterrows(), start=start + 1):
-            values = [idx] + [self._format_value(row[col]) for col in COLUMNS]
+            formatted_values: List[str] = []
+            for col in COLUMNS:
+                if col == "Total Discount":
+                    formatted_values.append(self._format_discount_fraction(row[col]))
+                else:
+                    formatted_values.append(self._format_value(row[col]))
+            values = [idx] + formatted_values
             tags: Tuple[str, ...] = ()
             if str(row.get("Invoiced", "")).upper() == "YES":
                 tags = ("invoiced",)
@@ -650,6 +800,9 @@ class SalesEntryApp:
             if isinstance(var, tk.StringVar):
                 if key in ("QI Forecast", "Invoiced"):
                     var.set("NO")
+                elif key == "Sales Man":
+                    options = self._get_sales_rep_options()
+                    var.set(options[0] if options else "")
                 elif "Date" in key:
                     var.set(datetime.today().strftime("%d.%m.%Y"))
                 else:
@@ -681,12 +834,17 @@ class SalesEntryApp:
                 self.form_vars[col].set(str(value) if value is not None else "")
 
         amount = self._to_float(row_data.get("Amount")) or 0
-        discount_amount = self._to_float(row_data.get("Total Discount")) or 0
-        if amount:
-            percent = (discount_amount / amount) * 100
-            self.form_vars["DiscountPercent"].set(self._format_percent(percent))
-        else:
+        discount_value = self._to_float(row_data.get("Total Discount"))
+        if discount_value is None:
             self.form_vars["DiscountPercent"].set("")
+        else:
+            if discount_value > 1 and amount:
+                percent = (discount_value / amount) * 100
+            elif discount_value > 1:
+                percent = discount_value
+            else:
+                percent = discount_value * 100
+            self.form_vars["DiscountPercent"].set(self._format_percent(percent))
         self._update_cpi_field()
         try:
             row_index = int(item["values"][0]) - 1
@@ -701,6 +859,12 @@ class SalesEntryApp:
         if isinstance(value, (float, int)):
             return f"{value:,.2f}" if value > 999 else f"{value:.2f}"
         return str(value)
+
+    def _format_discount_fraction(self, value) -> str:
+        fraction = self._to_float(value)
+        if fraction is None:
+            return ""
+        return f"{fraction:.2f}".replace(".", ",")
 
     def _parse_float(self, value: str) -> Optional[float]:
         if not value:
@@ -771,21 +935,25 @@ class SalesEntryApp:
         amount = self._parse_float(self.form_vars["Amount"].get())
         if amount is None:
             errors.append("Geçerli bir tutar girin")
-        discount_percent = self._parse_float(self.form_vars["DiscountPercent"].get()) or 0.0
+        discount_percent_value = self._parse_float(self.form_vars["DiscountPercent"].get()) or 0.0
         self._format_discount_entry()
-        if discount_percent < 0:
+        if discount_percent_value < 0:
             errors.append("İndirim yüzdesi negatif olamaz")
+        discount_fraction = discount_percent_value / 100
+        if discount_fraction > 1:
+            errors.append("İndirim 100%'ü aşamaz")
         cps_value = self._parse_float(self.form_vars["CPS"].get()) or 0.0
 
         if errors:
             return None, "\n".join(errors)
 
-        discount_amount = amount * discount_percent / 100
+        discount_fraction = max(0.0, min(discount_fraction, 1.0))
+        discount_amount = amount * discount_fraction
         cpi_value = amount - discount_amount
         cpi_total = amount - cps_value
 
         data["Amount"] = amount
-        data["Total Discount"] = discount_amount
+        data["Total Discount"] = discount_fraction
         data["CPI"] = cpi_value
         data["CPS"] = cps_value
         data["Invoiced Amount"] = cpi_total
@@ -889,7 +1057,12 @@ class SalesEntryApp:
 
         ttk.Label(popup, text="Satış Elemanı").pack(pady=4)
         salesman_var = tk.StringVar(value=opts.salesman)
-        ttk.Combobox(popup, textvariable=salesman_var, values=["", *SALES_REPS], state="readonly").pack(fill="x", padx=16)
+        ttk.Combobox(
+            popup,
+            textvariable=salesman_var,
+            values=["", *self.sales_reps],
+            state="readonly",
+        ).pack(fill="x", padx=16)
 
         ttk.Label(popup, text="Fatura Durumu").pack(pady=4)
         invoiced_var = tk.StringVar(value=opts.invoiced)
