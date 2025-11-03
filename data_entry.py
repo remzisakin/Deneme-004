@@ -279,11 +279,16 @@ class SalesEntryApp:
     def _create_form(self) -> None:
         self.form_vars: Dict[str, tk.Variable] = {}
 
-        def create_labeled_row(parent, label_text, widget_func):
+        def create_labeled_row(parent, label_text, widget_factory):
+            """Create a labelled row and ensure the widget is packed correctly."""
+
             row = ttk.Frame(parent)
             row.pack(fill="x", pady=3)
             ttk.Label(row, text=label_text, width=22).pack(side="left")
-            widget = widget_func(row)
+
+            widget = widget_factory(row)
+            if isinstance(widget, tk.Widget):
+                widget.pack(side="left", fill="x", expand=True)
             return widget
 
         today = datetime.today()
@@ -302,7 +307,7 @@ class SalesEntryApp:
         for field in ("Date of Request", "Date of Issue", "Date of Delivery"):
             var = self.form_vars[field]
 
-            def widget_func(parent, v=var):
+            def widget_factory(parent, v=var):
                 entry = DateEntry(
                     parent,
                     textvariable=v,
@@ -314,17 +319,20 @@ class SalesEntryApp:
                 entry.set_date(today)
                 return entry
 
-            create_labeled_row(self.form_frame, date_labels[field], widget_func)
+            create_labeled_row(self.form_frame, date_labels[field], widget_factory)
 
         # Satış bilgileri
         self.form_vars["Sales Man"] = tk.StringVar(value=SALES_REPS[0])
-        self.salesman_combo = ttk.Combobox(
-            self.form_frame,
-            textvariable=self.form_vars["Sales Man"],
-            values=SALES_REPS,
-            state="readonly",
-        )
-        create_labeled_row(self.form_frame, "Satış Elemanı", lambda parent: self.salesman_combo)
+        def salesman_factory(parent: tk.Widget) -> ttk.Combobox:
+            combo = ttk.Combobox(
+                parent,
+                textvariable=self.form_vars["Sales Man"],
+                values=SALES_REPS,
+                state="readonly",
+            )
+            return combo
+
+        self.salesman_combo = create_labeled_row(self.form_frame, "Satış Elemanı", salesman_factory)
         self.salesman_combo.bind("<<ComboboxSelected>>", self._handle_salesman_selection)
 
         text_fields = [
