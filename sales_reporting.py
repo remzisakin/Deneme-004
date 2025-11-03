@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from datetime import datetime
+from difflib import get_close_matches
 from typing import Iterable, Optional
 
 import pandas as pd
@@ -50,6 +52,36 @@ REQUIRED_COLUMNS = [
 DATE_COLUMNS = ["Date of Request", "Date of Issue", "Date of Delivery"]
 CURRENCY_COLUMNS = ["Amount", "Total Discount", "CPI", "CPS", "Invoiced Amount"]
 
+COLUMN_SYNONYMS = {
+    "dateofrequest": {"requestdate", "talepdate", "taleptarihi"},
+    "dateofissue": {"issuedate", "faturatarihi", "belgetarihi"},
+    "dateofdelivery": {"deliverydate", "teslimtarihi", "sevktarihi", "teslimattarihi"},
+    "salesman": {
+        "salesperson",
+        "salesrepresentative",
+        "salesrep",
+        "satiselemani",
+        "satisuzmani",
+    },
+    "customername": {"customer", "musteriadi", "musteriismi", "müşteriadi", "müşterismi"},
+    "customerdono": {"deliveryorderno", "donumber", "dono", "sevkemrino"},
+    "definition": {"description", "aciklama", "ürünaciklamasi"},
+    "c4ccode": {"c4c", "c4ckodu"},
+    "salesticketreference": {"ticketreference", "ticketref", "salesreference", "referans"},
+    "sono": {"salesorderno", "salesorder", "salesordernumber", "siparisno", "siparisnumarasi"},
+    "pono": {"purchaseorder", "purchaseorderno", "satinalmano", "satinalmanum"},
+    "amount": {"tutar", "toplamtutar"},
+    "totaldiscount": {"discount", "iskonto", "toplamiskonto"},
+    "cpi": {"cpiusd", "cpiamount"},
+    "cps": {"cpsusd", "cpsamount"},
+    "qiforecast": {"forecast", "qi", "qiforecaststatus", "forecastqi"},
+    "deliverynote": {"irsaliye", "deliverynotenumber", "irsaliyeno", "irsaliye no"},
+    "invoiced": {"faturalanan", "invoice"},
+    "invoicedamount": {"invoiceamount", "faturatutari", "faturalanantutar"},
+}
+
+STOPWORDS = {"of", "the", "no"}
+
 TURKISH_MONTHS = {
     1: "Ocak",
     2: "Şubat",
@@ -66,6 +98,70 @@ TURKISH_MONTHS = {
 }
 
 
+def _normalise_column_key(name: str) -> str:
+    return "".join(ch for ch in str(name).strip().lower() if ch.isalnum())
+
+
+def _column_token_key(name: str) -> tuple[str, ...]:
+    tokens = [token for token in re.findall(r"[\w]+", str(name).lower()) if token]
+    filtered = [token for token in tokens if token not in STOPWORDS]
+    return tuple(sorted(filtered))
+
+
+def _match_required_columns(columns: Iterable[str]) -> tuple[dict[str, str], list[str]]:
+    normalised_map: dict[str, str] = {}
+    token_map: dict[tuple[str, ...], str] = {}
+
+    for column in columns:
+        normalised_key = _normalise_column_key(column)
+        normalised_map.setdefault(normalised_key, column)
+
+        token_key = _column_token_key(column)
+        if token_key and token_key not in token_map:
+            token_map[token_key] = column
+
+    rename_map: dict[str, str] = {}
+    missing: list[str] = []
+    used_columns: set[str] = set()
+
+    for required in REQUIRED_COLUMNS:
+        required_key = _normalise_column_key(required)
+        match: Optional[str] = None
+
+        if required_key in normalised_map:
+            candidate = normalised_map[required_key]
+            if candidate not in used_columns:
+                match = candidate
+
+        if not match:
+            for alias in COLUMN_SYNONYMS.get(required_key, set()):
+                if alias in normalised_map and normalised_map[alias] not in used_columns:
+                    match = normalised_map[alias]
+                    break
+
+        if not match:
+            token_key = _column_token_key(required)
+            if token_key in token_map and token_map[token_key] not in used_columns:
+                match = token_map[token_key]
+
+        if not match:
+            close_matches = get_close_matches(
+                required_key, list(normalised_map.keys()), n=1, cutoff=0.8
+            )
+            if close_matches:
+                candidate = normalised_map[close_matches[0]]
+                if candidate not in used_columns:
+                    match = candidate
+
+        if match:
+            rename_map[match] = required
+            used_columns.add(match)
+        else:
+            missing.append(required)
+
+    return rename_map, missing
+
+
 def read_and_clean_data(filepath: str) -> pd.DataFrame:
     """Read the Excel file and perform initial validation and cleaning."""
 
@@ -77,10 +173,17 @@ def read_and_clean_data(filepath: str) -> pd.DataFrame:
     except Exception as exc:  # pragma: no cover - defensive
         raise RuntimeError(f"Excel dosyası okunamadı: {exc}") from exc
 
-    missing_columns = [col for col in REQUIRED_COLUMNS if col not in df.columns]
+    rename_map, missing_columns = _match_required_columns(df.columns)
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
     if missing_columns:
+        available = ", ".join(str(col) for col in df.columns)
         raise ValueError(
-            "Eksik sütunlar tespit edildi: " + ", ".join(missing_columns)
+            "Eksik sütunlar tespit edildi: "
+            + ", ".join(missing_columns)
+            + ". Mevcut sütunlar: "
+            + available
         )
 
     for date_col in DATE_COLUMNS:
