@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 from datetime import datetime
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -301,12 +301,22 @@ def write_dataframe(
     apply_table_formatting(sheet, startrow + 1, startcol + 1, end_row, end_col)
 
 
-def generate_sales_report(input_file: str, output_file: str) -> None:
+def generate_sales_report(
+    input_file: str,
+    output_file: str,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+) -> None:
     """Main orchestration entry-point for creating the Excel report."""
 
-    print("Veri okunuyor...")
+    def report_progress(step: int, total_steps: int, message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(step / total_steps, message)
+        print(message)
+
+    total_steps = 6
+    report_progress(1, total_steps, "Veri okunuyor...")
     df = read_and_clean_data(input_file)
-    print(f"Toplam kayıt sayısı: {len(df)}")
+    report_progress(2, total_steps, f"Toplam kayıt sayısı: {len(df)}")
 
     invoiced_df = df[df["Invoiced"] == True]
     not_invoiced_df = df[df["Invoiced"] == False]
@@ -345,6 +355,8 @@ def generate_sales_report(input_file: str, output_file: str) -> None:
         "Metrik": "Aylık Ortalama CPI",
         "Değer": avg_cpi,
     }
+
+    report_progress(3, total_steps, "Excel sayfaları hazırlanıyor...")
 
     with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
         write_dataframe(writer, summary_metrics, "Özet Dashboard")
@@ -393,11 +405,13 @@ def generate_sales_report(input_file: str, output_file: str) -> None:
 
     workbook.save(output_file)
 
-    print("Rapor oluşturuldu.")
+    report_progress(4, total_steps, "Grafikler ekleniyor...")
+
+    report_progress(5, total_steps, "Rapor oluşturuldu.")
+    report_progress(6, total_steps, f"Rapor kaydedildi: {output_file}")
     print(f"Faturalanan kayıt sayısı: {len(invoiced_df)}")
     print(f"Faturalanmayan kayıt sayısı: {len(not_invoiced_df)}")
     print(f"QI Forecast = YES kayıt sayısı: {len(won_df)}")
-    print(f"Rapor kaydedildi: {output_file}")
 
 
 def _add_category_chart(workbook, sheet_name: str, column_count: int) -> None:
@@ -418,7 +432,12 @@ def _add_category_chart(workbook, sheet_name: str, column_count: int) -> None:
 
 def parse_arguments(args: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Satış raporlama aracı")
-    parser.add_argument("input_file", help="Kaynak Excel dosyası")
+    parser.add_argument(
+        "input_file",
+        nargs="?",
+        default="sales_data_master.xlsx",
+        help="Kaynak Excel dosyası",
+    )
     parser.add_argument(
         "output_file",
         nargs="?",
