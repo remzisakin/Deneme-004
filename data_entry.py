@@ -33,6 +33,7 @@ BACKUP_DIR = Path("backups")
 REPORT_DIR = Path("reports")
 AUTO_SAVE_INTERVAL = 5 * 60 * 1000  # 5 minutes in milliseconds
 PAGE_SIZE = 15
+FORM_BUTTON_WIDTH = 18
 
 COLUMNS = [
     "Date of Request",
@@ -416,6 +417,7 @@ class SalesEntryApp:
             command=self.start_new_entry,
         )
         self.new_entry_button.grid(row=0, column=0, sticky="ew", padx=4)
+        self.new_entry_button.configure(width=FORM_BUTTON_WIDTH)
 
         self.update_button = ttk.Button(
             top_action_frame,
@@ -424,24 +426,25 @@ class SalesEntryApp:
             command=self.update_data,
         )
         self.update_button.grid(row=0, column=1, sticky="ew", padx=4)
+        self.update_button.configure(width=FORM_BUTTON_WIDTH)
 
         self.undo_button = ttk.Button(
             top_action_frame,
             text="↩",
             style="Action.TButton",
             command=self.undo_last_change,
-            width=3,
         )
         self.undo_button.grid(row=0, column=2, sticky="ew", padx=4)
+        self.undo_button.configure(width=FORM_BUTTON_WIDTH)
 
         self.redo_button = ttk.Button(
             top_action_frame,
             text="↪",
             style="Action.TButton",
             command=self.redo_last_change,
-            width=3,
         )
         self.redo_button.grid(row=0, column=3, sticky="ew", padx=4)
+        self.redo_button.configure(width=FORM_BUTTON_WIDTH)
 
         def create_labeled_row(parent, label_text, widget_factory):
             """Create a labelled row and ensure the widget is packed correctly."""
@@ -559,7 +562,7 @@ class SalesEntryApp:
         notes_row = ttk.Frame(self.form_frame)
         notes_row.pack(fill="both", pady=3)
         ttk.Label(notes_row, text="Notlar", width=22).pack(side="left", anchor="n")
-        self.notes_text = tk.Text(notes_row, height=3, wrap="word", font=("Segoe UI", 10))
+        self.notes_text = tk.Text(notes_row, height=2, wrap="word", font=("Segoe UI", 10))
         self.notes_text.pack(side="left", fill="both", expand=True)
 
         self.discount_entry.bind("<FocusIn>", self._on_discount_focus_in)
@@ -694,31 +697,27 @@ class SalesEntryApp:
             text="💾 Kaydet",
             style="ActionAccent.TButton",
             command=self.save_data,
+            width=FORM_BUTTON_WIDTH,
         )
         self.quick_save_button.pack(side="left", padx=4)
-
-        self.quick_update_button = ttk.Button(
-            quick_actions,
-            text="✏️ Güncelle",
-            style="ActionPrimary.TButton",
-            command=self.update_data,
-        )
-        self.quick_update_button.pack(side="left", padx=4)
 
         self.quick_delete_button = ttk.Button(
             quick_actions,
             text="🗑 Sil",
             style="ActionDanger.TButton",
             command=self.delete_data,
+            width=FORM_BUTTON_WIDTH,
         )
         self.quick_delete_button.pack(side="left", padx=4)
 
-        ttk.Button(
+        self.quick_reset_button = ttk.Button(
             quick_actions,
             text="🧹 Temizle",
             style="Action.TButton",
             command=self.reset_form,
-        ).pack(side="left", padx=4)
+            width=FORM_BUTTON_WIDTH,
+        )
+        self.quick_reset_button.pack(side="left", padx=4)
 
         ttk.Button(bottom_frame, text="Yedeklemeyi Aç", command=self.open_backup_directory).pack(side="right")
 
@@ -785,12 +784,6 @@ class SalesEntryApp:
             self.update_button.state(["!disabled"])
         else:
             self.update_button.state(["disabled"])
-
-        if hasattr(self, "quick_update_button"):
-            if self.selected_index is not None:
-                self.quick_update_button.state(["!disabled"])
-            else:
-                self.quick_update_button.state(["disabled"])
 
         if hasattr(self, "quick_delete_button"):
             if self.selected_index is not None:
