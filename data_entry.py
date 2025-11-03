@@ -403,6 +403,46 @@ class SalesEntryApp:
         self.form_vars: Dict[str, tk.Variable] = {}
         self.date_entries: Dict[str, DateEntry] = {}
 
+        # Üst kısımda yer alan aksiyon butonları
+        top_action_frame = ttk.Frame(self.form_frame)
+        top_action_frame.pack(fill="x", pady=(0, 12))
+        for column in range(4):
+            top_action_frame.columnconfigure(column, weight=1)
+
+        self.new_entry_button = ttk.Button(
+            top_action_frame,
+            text="＋ Yeni Kayıt",
+            style="ActionPrimary.TButton",
+            command=self.start_new_entry,
+        )
+        self.new_entry_button.grid(row=0, column=0, sticky="ew", padx=4)
+
+        self.update_button = ttk.Button(
+            top_action_frame,
+            text="✏️ Güncelle",
+            style="ActionPrimary.TButton",
+            command=self.update_data,
+        )
+        self.update_button.grid(row=0, column=1, sticky="ew", padx=4)
+
+        self.undo_button = ttk.Button(
+            top_action_frame,
+            text="↩",
+            style="Action.TButton",
+            command=self.undo_last_change,
+            width=3,
+        )
+        self.undo_button.grid(row=0, column=2, sticky="ew", padx=4)
+
+        self.redo_button = ttk.Button(
+            top_action_frame,
+            text="↪",
+            style="Action.TButton",
+            command=self.redo_last_change,
+            width=3,
+        )
+        self.redo_button.grid(row=0, column=3, sticky="ew", padx=4)
+
         def create_labeled_row(parent, label_text, widget_factory):
             """Create a labelled row and ensure the widget is packed correctly."""
 
@@ -550,7 +590,7 @@ class SalesEntryApp:
         # Aksiyon butonları
         action_frame = ttk.LabelFrame(self.form_frame, text="Kayıt İşlemleri")
         action_frame.pack(fill="x", pady=(18, 0))
-        for column in range(4):
+        for column in range(3):
             action_frame.columnconfigure(column, weight=1)
 
         self.save_button = ttk.Button(
@@ -561,51 +601,19 @@ class SalesEntryApp:
         )
         self.save_button.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
 
-        self.update_button = ttk.Button(
-            action_frame,
-            text="✏️ Güncelle",
-            style="ActionPrimary.TButton",
-            command=self.update_data,
-        )
-        self.update_button.grid(row=0, column=1, sticky="ew", padx=4, pady=4)
-
         ttk.Button(
             action_frame,
             text="🗑 Sil",
             style="ActionDanger.TButton",
             command=self.delete_data,
-        ).grid(row=0, column=2, sticky="ew", padx=4, pady=4)
-
-        self.undo_button = ttk.Button(
-            action_frame,
-            text="↩ Geri Al",
-            style="Action.TButton",
-            command=self.undo_last_change,
-        )
-        self.undo_button.grid(row=0, column=3, sticky="ew", padx=4, pady=4)
+        ).grid(row=0, column=1, sticky="ew", padx=4, pady=4)
 
         ttk.Button(
             action_frame,
             text="🧹 Temizle",
             style="Action.TButton",
             command=self.reset_form,
-        ).grid(row=1, column=0, sticky="ew", padx=4, pady=4)
-
-        self.new_entry_button = ttk.Button(
-            action_frame,
-            text="＋ Yeni Sipariş Verisi",
-            style="ActionPrimary.TButton",
-            command=self.start_new_entry,
-        )
-        self.new_entry_button.grid(row=1, column=1, columnspan=2, sticky="ew", padx=4, pady=4)
-
-        self.redo_button = ttk.Button(
-            action_frame,
-            text="↪ İleri Al",
-            style="Action.TButton",
-            command=self.redo_last_change,
-        )
-        self.redo_button.grid(row=1, column=3, sticky="ew", padx=4, pady=4)
+        ).grid(row=0, column=2, sticky="ew", padx=4, pady=4)
 
         self._update_button_states()
 
