@@ -1072,22 +1072,32 @@ class SalesEntryApp:
         updated = False
         for idx, row in self.df.iterrows():
             discount_raw = self._to_float(row.get("Total Discount"))
-            if discount_raw is None:
-                continue
             amount = self._to_float(row.get("Amount"))
-            if discount_raw > 1:
-                if amount:
-                    fraction = discount_raw / amount
+            cps_value = self._to_float(row.get("CPS")) or 0.0
+
+            if discount_raw is not None:
+                if discount_raw > 1:
+                    if amount:
+                        fraction = discount_raw / amount
+                    else:
+                        fraction = discount_raw / 100
                 else:
-                    fraction = discount_raw / 100
-            else:
-                fraction = discount_raw
-            fraction = max(0.0, min(fraction, 1.0))
-            if discount_raw != fraction:
-                self.df.at[idx, "Total Discount"] = fraction
-                if amount is not None:
-                    self.df.at[idx, "CPI"] = amount * (1 - fraction)
-                updated = True
+                    fraction = discount_raw
+                fraction = max(0.0, min(fraction, 1.0))
+                if discount_raw != fraction:
+                    self.df.at[idx, "Total Discount"] = fraction
+                    updated = True
+
+            if amount is not None:
+                expected_cpi = amount - cps_value
+                current_cpi = self._to_float(row.get("CPI"))
+                if current_cpi is None or abs(current_cpi - expected_cpi) > 0.005:
+                    self.df.at[idx, "CPI"] = expected_cpi
+                    updated = True
+                invoiced_amount = self._to_float(row.get("Invoiced Amount"))
+                if invoiced_amount is None or abs(invoiced_amount - expected_cpi) > 0.005:
+                    self.df.at[idx, "Invoiced Amount"] = expected_cpi
+                    updated = True
         if updated:
             self._update_status("İndirim verileri güncellendi")
 
@@ -1420,13 +1430,11 @@ class SalesEntryApp:
             return None, "\n".join(errors)
 
         discount_fraction = max(0.0, min(discount_fraction, 1.0))
-        discount_amount = amount * discount_fraction
-        cpi_value = amount - discount_amount
         cpi_total = amount - cps_value
 
         data["Amount"] = amount
         data["Total Discount"] = discount_fraction
-        data["CPI"] = cpi_value
+        data["CPI"] = cpi_total
         data["CPS"] = cps_value
         data["Invoiced Amount"] = cpi_total
         data["QI Forecast"] = data["QI Forecast"].upper() if data["QI Forecast"] else "NO"
