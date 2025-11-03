@@ -110,6 +110,7 @@ class SalesEntryApp:
         self.total_pages = 1
         self.selected_index: Optional[int] = None
         self.filter_options = FilterOptions()
+        self._updating_cpi_field = False
 
         self._config = self._load_config()
         self._apply_theme(self._config.get("theme", DEFAULT_THEME))
@@ -359,26 +360,36 @@ class SalesEntryApp:
         self.form_vars["CPS"] = tk.StringVar()
         self.form_vars["Invoiced Amount"] = tk.StringVar()
 
-        create_labeled_row(
+        self.amount_entry = create_labeled_row(
             self.form_frame,
             "Tutar (€)",
             lambda parent: ttk.Entry(parent, textvariable=self.form_vars["Amount"]),
         )
-        create_labeled_row(
+        self.discount_entry = create_labeled_row(
             self.form_frame,
             "İndirim (%)",
             lambda parent: ttk.Entry(parent, textvariable=self.form_vars["DiscountPercent"]),
         )
-        create_labeled_row(
+        self.cps_entry = create_labeled_row(
             self.form_frame,
             "CPS (€)",
             lambda parent: ttk.Entry(parent, textvariable=self.form_vars["CPS"]),
         )
-        create_labeled_row(
+        self.cpi_total_entry = create_labeled_row(
             self.form_frame,
-            "Fatura Tutarı (€)",
-            lambda parent: ttk.Entry(parent, textvariable=self.form_vars["Invoiced Amount"]),
+            "CPI Tutarı (€)",
+            lambda parent: ttk.Entry(
+                parent,
+                textvariable=self.form_vars["Invoiced Amount"],
+                state="readonly",
+            ),
         )
+
+        self.discount_entry.bind("<FocusIn>", self._on_discount_focus_in)
+        self.discount_entry.bind("<FocusOut>", self._format_discount_entry)
+        self.form_vars["Amount"].trace_add("write", lambda *args: self._update_cpi_field())
+        self.form_vars["CPS"].trace_add("write", lambda *args: self._update_cpi_field())
+        self._update_cpi_field()
 
         # Boolean seçenekler
         self.form_vars["QI Forecast"] = tk.StringVar(value="NO")
@@ -418,8 +429,12 @@ class SalesEntryApp:
         )
         self.tree.pack(side="left", fill="both", expand=True)
 
+        self.tree.tag_configure("invoiced", background="#d1fae5")
+
+        display_names = {"Invoiced Amount": "CPI Tutarı"}
         for col in columns:
-            self.tree.heading(col, text=col, command=partial(self.sort_by_column, col))
+            heading_text = display_names.get(col, col)
+            self.tree.heading(col, text=heading_text, command=partial(self.sort_by_column, col))
             self.tree.column(col, width=120, anchor="center")
         self.tree.column("#", width=60, anchor="center")
         self.tree.column("Definition", width=200, anchor="w")
@@ -586,7 +601,10 @@ class SalesEntryApp:
 
         for idx, (_, row) in enumerate(page_df.iterrows(), start=start + 1):
             values = [idx] + [self._format_value(row[col]) for col in COLUMNS]
-            self.tree.insert("", "end", values=values)
+            tags: Tuple[str, ...] = ()
+            if str(row.get("Invoiced", "")).upper() == "YES":
+                tags = ("invoiced",)
+            self.tree.insert("", "end", values=values, tags=tags)
 
         self.page_var.set(f"Sayfa {self.current_page}/{self.total_pages}")
         self.file_info_var.set(f"Dosya: {DATA_FILE} | Kayıt: {len(self.df)}")
@@ -638,6 +656,7 @@ class SalesEntryApp:
                     var.set("")
         self.selected_index = None
         self.tree.selection_remove(self.tree.selection())
+        self._update_cpi_field()
         self._update_status("Form temizlendi")
 
     def populate_form_from_selection(self) -> None:
@@ -665,9 +684,10 @@ class SalesEntryApp:
         discount_amount = self._to_float(row_data.get("Total Discount")) or 0
         if amount:
             percent = (discount_amount / amount) * 100
-            self.form_vars["DiscountPercent"].set(f"{percent:.2f}")
+            self.form_vars["DiscountPercent"].set(self._format_percent(percent))
         else:
             self.form_vars["DiscountPercent"].set("")
+        self._update_cpi_field()
         try:
             row_index = int(item["values"][0]) - 1
         except Exception:
@@ -691,6 +711,39 @@ class SalesEntryApp:
             return float(cleaned)
         except ValueError:
             return None
+
+    def _format_percent(self, value: float) -> str:
+        return f"%{value:.2f}".replace(".", ",")
+
+    def _on_discount_focus_in(self, _event) -> None:
+        value = self.form_vars["DiscountPercent"].get().strip()
+        if value.startswith("%"):
+            self.form_vars["DiscountPercent"].set(value[1:])
+
+    def _format_discount_entry(self, _event=None) -> None:
+        value = self._parse_float(self.form_vars["DiscountPercent"].get())
+        if value is None:
+            if not self.form_vars["DiscountPercent"].get().strip():
+                self.form_vars["DiscountPercent"].set("")
+            return
+        self.form_vars["DiscountPercent"].set(self._format_percent(value))
+
+    def _update_cpi_field(self) -> None:
+        if self._updating_cpi_field:
+            return
+        self._updating_cpi_field = True
+        try:
+            amount = self._parse_float(self.form_vars["Amount"].get())
+            cps_value = self._parse_float(self.form_vars["CPS"].get())
+            if amount is None:
+                self.form_vars["Invoiced Amount"].set("")
+                return
+            cps = cps_value or 0.0
+            cpi_total = amount - cps
+            formatted = f"{cpi_total:.2f}".replace(".", ",")
+            self.form_vars["Invoiced Amount"].set(formatted)
+        finally:
+            self._updating_cpi_field = False
 
     def _to_float(self, value) -> Optional[float]:
         if pd.isna(value) or value == "":
@@ -719,22 +772,23 @@ class SalesEntryApp:
         if amount is None:
             errors.append("Geçerli bir tutar girin")
         discount_percent = self._parse_float(self.form_vars["DiscountPercent"].get()) or 0.0
+        self._format_discount_entry()
         if discount_percent < 0:
             errors.append("İndirim yüzdesi negatif olamaz")
-        cps_value = self._parse_float(self.form_vars["CPS"].get())
-        invoiced_amount = self._parse_float(self.form_vars["Invoiced Amount"].get())
+        cps_value = self._parse_float(self.form_vars["CPS"].get()) or 0.0
 
         if errors:
             return None, "\n".join(errors)
 
         discount_amount = amount * discount_percent / 100
         cpi_value = amount - discount_amount
+        cpi_total = amount - cps_value
 
         data["Amount"] = amount
         data["Total Discount"] = discount_amount
         data["CPI"] = cpi_value
         data["CPS"] = cps_value
-        data["Invoiced Amount"] = invoiced_amount
+        data["Invoiced Amount"] = cpi_total
         data["QI Forecast"] = data["QI Forecast"].upper() if data["QI Forecast"] else "NO"
         data["Invoiced"] = data["Invoiced"].upper() if data["Invoiced"] else "NO"
 
