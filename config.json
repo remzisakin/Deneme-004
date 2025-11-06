@@ -1,3 +1,12 @@
 {
-  "theme": "light"
+  "theme": "light",
+  "sales_reps": [
+    "Remzi Sakin",
+    "Fatih Acikgoz",
+    "Irem Oguzkan",
+    "Ogulcan Coban",
+    "Eray Dinç",
+    "Caner Öztosun"
+  ],
+  "sales_rep_password": "Remzi123"
 }
