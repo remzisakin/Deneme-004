@@ -13,17 +13,29 @@ import os
 import threading
 import tkinter as tk
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import partial
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 
 import pandas as pd
 from tkcalendar import DateEntry
 
 import sales_reporting
+
+try:  # Optional dependency for visual reporting
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    from matplotlib.figure import Figure
+except ImportError:  # pragma: no cover - runtime guard
+    FigureCanvasTkAgg = None  # type: ignore[assignment]
+    Figure = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg as FigureCanvasTkAggType
+else:  # pragma: no cover - runtime fallback
+    FigureCanvasTkAggType = object
 
 
 APP_TITLE = "Satış Veri Giriş Sistemi"
@@ -36,13 +48,16 @@ AUTO_SAVE_INTERVAL = 5 * 60 * 1000  # 5 minutes in milliseconds
 PAGE_SIZE = 15
 FORM_BUTTON_WIDTH = 12
 
+ASSETS_DIR = Path("assets")
+DESOUTTER_THEME_KEY = "desoutter"
+
 COLUMNS = [
     "Date of Request",
     "Date of Issue",
     "Date of Delivery",
     "Sales Man",
     "Customer Name",
-    "Customer DO No",
+    "Customer PO No",
     "Definition",
     "Sales Ticket Reference",
     "SO No",
@@ -62,7 +77,7 @@ DEFAULT_SALES_REPS = ["Fatih Aykut", "Ridvan Yasar", "Rami Sakin"]
 OTHER_SALES_REP_OPTION = "Diğer..."
 DEFAULT_SALES_REP_PASSWORD = "Remzi123"
 DEFAULT_THEME = "light"
-THEMES = {"light": "Açık", "dark": "Koyu"}
+THEMES = {"light": "Açık", "dark": "Koyu", DESOUTTER_THEME_KEY: "Desoutter Tema"}
 
 COLORS = {
     "primary": "#667eea",
@@ -122,12 +137,16 @@ class SalesEntryApp:
         self.filter_options = FilterOptions()
         self._updating_cpi_field = False
         self._suspend_delivery_autofill = False
-
+        self._theme_settings: Dict[str, str] = {}
+        self._desoutter_logo: Optional[tk.PhotoImage] = None
+        self._report_canvases: List[FigureCanvasTkAggType] = []
+        
         self._config = self._load_config()
         self.sales_reps = self._load_sales_reps()
         self.sales_rep_password = self._config.get(
             "sales_rep_password", DEFAULT_SALES_REP_PASSWORD
         )
+        self._load_theme_assets()
         self._apply_theme(self._config.get("theme", DEFAULT_THEME))
 
         self._ensure_directories()
@@ -197,77 +216,138 @@ class SalesEntryApp:
     def _get_sales_rep_options(self) -> List[str]:
         return [*self.sales_reps, OTHER_SALES_REP_OPTION]
 
+    def _load_theme_assets(self) -> None:
+        logo_path = ASSETS_DIR / "desoutter_logo_dark.png"
+        if logo_path.exists():
+            try:
+                self._desoutter_logo = tk.PhotoImage(file=str(logo_path))
+            except tk.TclError:
+                self._desoutter_logo = None
+
     def _apply_theme(self, theme: str) -> None:
         if theme == "dark":
-            bg = COLORS["bg_dark"]
-            fg = "white"
-            action_bg = "#374151"
-            action_fg = "white"
-            disabled_bg = "#4b5563"
-            disabled_fg = "#9ca3af"
+                settings = {
+                "bg": COLORS["bg_dark"],
+                "fg": "white",
+                "accent": COLORS["primary"],
+                "secondary": COLORS["secondary"],
+                "action_bg": "#374151",
+                "action_fg": "white",
+                "disabled_bg": "#4b5563",
+                "disabled_fg": "#9ca3af",
+                "card_bg": "#2a2f3a",
+                "table_bg": "#1f2530",
+                "table_fg": "#f4f4f5",
+            }
+        elif theme == DESOUTTER_THEME_KEY:
+            settings = {
+                "bg": "#101015",
+                "fg": "#f3f4f6",
+                "accent": "#E4002B",
+                "secondary": "#b30f27",
+                "action_bg": "#1e1e26",
+                "action_fg": "#f3f4f6",
+                "disabled_bg": "#2b2b35",
+                "disabled_fg": "#9ca3af",
+                "card_bg": "#16161f",
+                "table_bg": "#1d1d27",
+                "table_fg": "#f3f4f6",
+            }        
         else:
-            bg = COLORS["bg_light"]
-            fg = COLORS["text_dark"]
-            action_bg = "#e5e7eb"
-            action_fg = COLORS["text_dark"]
-            disabled_bg = "#d1d5db"
-            disabled_fg = COLORS["text_light"]
-        self.root.configure(bg=bg)
+            settings = {
+                "bg": COLORS["bg_light"],
+                "fg": COLORS["text_dark"],
+                "accent": COLORS["primary"],
+                "secondary": COLORS["secondary"],
+                "action_bg": "#e5e7eb",
+                "action_fg": COLORS["text_dark"],
+                "disabled_bg": "#d1d5db",
+                "disabled_fg": COLORS["text_light"],
+                "card_bg": "#ffffff",
+                "table_bg": "#ffffff",
+                "table_fg": COLORS["text_dark"],
+            }
+
+        self._theme_settings = settings
+        self.root.configure(bg=settings["bg"])
+        
         style = ttk.Style(self.root)
         style.theme_use("clam")
-        style.configure("TLabel", background=bg, foreground=fg, font=("Segoe UI", 10))
-        style.configure("Header.TLabel", font=("Segoe UI", 14, "bold"), foreground=COLORS["primary"])
-        style.configure("TFrame", background=bg)
+        style.configure("TLabel", background=settings["bg"], foreground=settings["fg"], font=("Segoe UI", 10))
+        style.configure(
+            "Header.TLabel",
+            font=("Segoe UI", 14, "bold"),
+            foreground=settings.get("accent", COLORS["primary"]),
+            background=settings["bg"],
+        )
+        style.configure("TFrame", background=settings["bg"])
         style.configure("TButton", font=("Segoe UI", 10), padding=6)
         style.map(
             "TButton",
-            background=[("active", COLORS["primary"])],
+            background=[("active", settings.get("accent", COLORS["primary"]))],
             foreground=[("active", "white")],
         )
         style.configure(
             "TLabelframe",
-            background=bg,
+            background=settings["bg"],
             borderwidth=0,
             padding=(10, 8),
         )
         style.configure(
             "TLabelframe.Label",
-            background=bg,
-            foreground=COLORS["text_light"] if theme != "dark" else "#d1d5db",
+            background=settings["bg"],
+            foreground=settings["fg"],
             font=("Segoe UI", 11, "bold"),
         )
+        style.configure(
+            "Card.TLabelframe",
+            background=settings["card_bg"],
+            borderwidth=0,
+            padding=(14, 10),
+        )
+        style.configure(
+            "Card.TLabelframe.Label",
+            background=settings["card_bg"],
+            foreground=settings["fg"],
+            font=("Segoe UI", 12, "bold"),
+        )
+        style.configure("Card.TFrame", background=settings["card_bg"])
+        style.configure("Card.TLabel", background=settings["card_bg"], foreground=settings["fg"], font=("Segoe UI", 10))
         style.configure(
             "Action.TButton",
             font=("Segoe UI", 11, "bold"),
             padding=(10, 6),
-            background=action_bg,
-            foreground=action_fg,
+            background=settings["action_bg"],
+            foreground=settings["action_fg"],
         )
         style.map(
             "Action.TButton",
-            background=[("disabled", disabled_bg), ("active", COLORS["primary"])],
-            foreground=[("disabled", disabled_fg), ("active", "white")],
+            background=[("disabled", settings["disabled_bg"]), ("active", settings.get("accent", COLORS["primary"]))],
+            foreground=[("disabled", settings["disabled_fg"]), ("active", "white")],
         )
         style.configure(
             "ActionPrimary.TButton",
             font=("Segoe UI", 11, "bold"),
             padding=(10, 6),
-            background=COLORS["primary"],
+            background=settings.get("accent", COLORS["primary"]),
             foreground="white",
             borderwidth=0,
         )
         style.map(
             "ActionPrimary.TButton",
-            background=[("disabled", disabled_bg), ("active", COLORS["secondary"])],
-            foreground=[("disabled", disabled_fg), ("active", "white")],
+            background=[("disabled", settings["disabled_bg"]), ("active", settings.get("secondary", COLORS["secondary"]))],
+            foreground=[("disabled", settings["disabled_fg"]), ("active", "white")],
         )
         style.configure(
             "Accent.TButton",
-            background=COLORS["primary"],
+            background=settings.get("accent", COLORS["primary"]),
             foreground="white",
             borderwidth=0,
         )
-        style.map("Accent.TButton", background=[("active", COLORS["secondary"])])
+        style.map(
+            "Accent.TButton",
+            background=[("active", settings.get("secondary", COLORS["secondary"]))],
+        )        
         style.configure(
             "ActionAccent.TButton",
             font=("Segoe UI", 11, "bold"),
@@ -278,8 +358,8 @@ class SalesEntryApp:
         )
         style.map(
             "ActionAccent.TButton",
-            background=[("disabled", disabled_bg), ("active", "#059669")],
-            foreground=[("disabled", disabled_fg), ("active", "white")],
+            background=[("disabled", settings["disabled_bg"]), ("active", "#059669")],
+            foreground=[("disabled", settings["disabled_fg"]), ("active", "white")],
         )
         style.configure(
             "ActionDanger.TButton",
@@ -291,10 +371,66 @@ class SalesEntryApp:
         )
         style.map(
             "ActionDanger.TButton",
-            background=[("disabled", disabled_bg), ("active", "#b91c1c")],
-            foreground=[("disabled", disabled_fg), ("active", "white")],
+            background=[("disabled", settings["disabled_bg"]), ("active", "#b91c1c")],
+            foreground=[("disabled", settings["disabled_fg"]), ("active", "white")],
         )
+        style.configure(
+            "Custom.Treeview",
+            background=settings["table_bg"],
+            foreground=settings["table_fg"],
+            fieldbackground=settings["table_bg"],
+            rowheight=26,
+            font=("Segoe UI", 10),
+            borderwidth=0,
+        )
+        style.map(
+            "Custom.Treeview",
+            background=[("selected", settings.get("accent", COLORS["secondary"]))],
+            foreground=[("selected", "white")],
+        )
+        style.configure(
+            "Custom.Treeview.Heading",
+            font=("Segoe UI", 10, "bold"),
+            background=settings["card_bg"],
+            foreground=settings["fg"],
+        )
+        style.configure(
+            "Report.Treeview",
+            background=settings["card_bg"],
+            foreground=settings["fg"],
+            fieldbackground=settings["card_bg"],
+            rowheight=28,
+            font=("Segoe UI", 10),
+            borderwidth=0,
+        )
+        style.map(
+            "Report.Treeview",
+            background=[("selected", settings.get("accent", COLORS["primary"]))],
+            foreground=[("selected", "white")],
+        )
+        style.configure(
+            "Report.Treeview.Heading",
+            font=("Segoe UI", 10, "bold"),
+            background=settings["card_bg"],
+            foreground=settings["fg"],
+        )
+        
+        self._apply_branding(theme)
 
+    def _apply_branding(self, theme: str) -> None:
+        if not hasattr(self, "logo_label"):
+            return
+        if theme == DESOUTTER_THEME_KEY and self._desoutter_logo is not None:
+            bg = self._theme_settings.get("bg", COLORS["bg_dark"])
+            self.logo_label.configure(image=self._desoutter_logo, background=bg)
+            if not self.logo_label.winfo_manager():
+                self.logo_label.pack(side="right", padx=(12, 0))
+        else:
+            bg = self._theme_settings.get("bg", COLORS["bg_light"])
+            self.logo_label.configure(image="", background=bg)
+            if self.logo_label.winfo_manager():
+                self.logo_label.pack_forget()
+        
     def _ensure_directories(self) -> None:
         BACKUP_DIR.mkdir(exist_ok=True)
         REPORT_DIR.mkdir(exist_ok=True)
@@ -310,14 +446,11 @@ class SalesEntryApp:
         style = ttk.Style(self.root)
         style.configure(
             "Custom.Treeview",
-            background="white",
-            foreground=COLORS["text_dark"],
-            fieldbackground="white",
             rowheight=26,
             font=("Segoe UI", 10),
         )
-        style.map("Custom.Treeview", background=[("selected", COLORS["secondary"])], foreground=[("selected", "white")])
         style.configure("Custom.Treeview.Heading", font=("Segoe UI", 10, "bold"))
+        style.configure("Report.Treeview", rowheight=28, font=("Segoe UI", 10))        
 
     def _create_status_bar(self) -> None:
         self.status_var = tk.StringVar()
@@ -390,8 +523,12 @@ class SalesEntryApp:
 
         ttk.Label(self.header_frame, text=APP_TITLE, style="Header.TLabel").pack(side="left")
         self.file_info_var = tk.StringVar(value=f"Dosya: {DATA_FILE} | Kayıt: 0")
-        ttk.Label(self.header_frame, textvariable=self.file_info_var).pack(side="right")
-
+        self.file_info_label = ttk.Label(self.header_frame, textvariable=self.file_info_var)
+        self.file_info_label.pack(side="right")
+        self.logo_label = tk.Label(self.header_frame, bd=0, highlightthickness=0, borderwidth=0)
+        self.logo_label.pack_forget()
+        self._apply_branding(self._config.get("theme", DEFAULT_THEME))
+        
         self.content_frame = ttk.Frame(self.root)
         self.content_frame.pack(fill="both", expand=True, padx=16, pady=8)
 
@@ -517,7 +654,7 @@ class SalesEntryApp:
 
         text_fields = [
             ("Customer Name", "Müşteri Adı"),
-            ("Customer DO No", "Müşteri Sipariş No"),
+            ("Customer PO No", "Müşteri Sipariş No"),
             ("Definition", "Ürün Tanımı"),
             ("Sales Ticket Reference", "SalesForce Ref"),
             ("SO No", "SO No"),
@@ -1408,8 +1545,28 @@ class SalesEntryApp:
     def _format_value(self, value) -> str:
         if pd.isna(value):
             return ""
+        if isinstance(value, pd.Timestamp):
+            if pd.isna(value):
+                return ""
+            return value.strftime("%d.%m.%Y")
+        if isinstance(value, datetime):
+            return value.strftime("%d.%m.%Y")
+        if isinstance(value, date):
+            return value.strftime("%d.%m.%Y")            
         if isinstance(value, (float, int)):
             return f"{value:,.2f}" if value > 999 else f"{value:.2f}"
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return ""
+            if any(sep in stripped for sep in ("-", ".", "/")):
+                try:
+                    parsed = pd.to_datetime(stripped, dayfirst=True, errors="coerce")
+                except Exception:
+                    parsed = None
+                if parsed is not None and not pd.isna(parsed):
+                    return parsed.strftime("%d.%m.%Y")
+            return stripped            
         return str(value)
 
     def _format_discount_fraction(self, value) -> str:
@@ -1704,8 +1861,21 @@ class SalesEntryApp:
             self.apply_filters()
             popup.destroy()
 
-        ttk.Button(popup, text="Uygula", command=apply).pack(pady=6)
+        def reset_filters() -> None:
+            self.filter_options = FilterOptions()
+            search_var.set("")
+            so_no_var.set("")
+            salesman_var.set("")
+            invoiced_var.set("")
+            start_var.set("")
+            end_var.set("")
+            self.apply_filters()
 
+        button_frame = ttk.Frame(popup)
+        button_frame.pack(pady=6)
+        ttk.Button(button_frame, text="Uygula", command=apply).pack(side="left", padx=4)
+        ttk.Button(button_frame, text="Filtreleri Temizle", command=reset_filters).pack(side="left", padx=4)
+        
     def _parse_date_str(self, value: str) -> Optional[datetime]:
         if not value:
             return None
@@ -1718,10 +1888,305 @@ class SalesEntryApp:
                 return None
 
     # ------------------------------------------------------------- reporting
+    def _show_reporting_dashboard(self, df: pd.DataFrame) -> None:
+        if Figure is None or FigureCanvasTkAgg is None:
+            messagebox.showerror(
+                "Eksik Bileşen",
+                "Grafikleri görüntülemek için 'matplotlib' kütüphanesinin yüklü olması gerekir.\n"
+                "Lütfen 'pip install matplotlib' komutu ile kurulumu tamamlayın.",
+            )
+            return
+        dashboard = tk.Toplevel(self.root)
+        dashboard.title("Satış Raporu Paneli")
+        dashboard.geometry("1240x900")
+        dashboard.minsize(1080, 720)
+        settings = self._theme_settings or {}
+        bg_color = settings.get("bg", COLORS["bg_light"])
+        fg_color = settings.get("fg", COLORS["text_dark"])
+        accent = settings.get("accent", COLORS["primary"])
+        secondary = settings.get("secondary", COLORS["secondary"])
+        card_bg = settings.get("card_bg", "#ffffff")
+        dashboard.configure(bg=bg_color)
+        dashboard.transient(self.root)
+
+        container = ttk.Frame(dashboard)
+        container.pack(fill="both", expand=True, padx=16, pady=12)
+        container.grid_columnconfigure(0, weight=1)
+
+        data = df.copy()
+        for col in ("Amount", "CPI", "CPS", "Invoiced Amount"):
+            if col in data:
+                data[col] = pd.to_numeric(data[col], errors="coerce")
+        data["Sales Man"] = data.get("Sales Man", "").fillna("Bilinmiyor").astype(str)
+        data["Invoiced"] = data.get("Invoiced", "").astype(str).str.upper()
+        data["Date of Delivery"] = pd.to_datetime(data.get("Date of Delivery"), errors="coerce")
+
+        self._report_canvases.clear()
+
+        def normalise_numeric(values: Iterable) -> List[float]:
+            result: List[float] = []
+            for item in values:
+                if item is None or (isinstance(item, float) and pd.isna(item)):
+                    result.append(0.0)
+                else:
+                    try:
+                        result.append(float(item))
+                    except (TypeError, ValueError):
+                        result.append(0.0)
+            return result
+
+        def format_currency(value: float) -> str:
+            if value is None or pd.isna(value):
+                value = 0.0
+            return self._format_currency(value)
+
+        def build_table(parent: ttk.Frame, columns: List[str], rows: List[Tuple[str, ...]], *, height: int = 6) -> ttk.Treeview:
+            tree = ttk.Treeview(parent, columns=columns, show="headings", style="Report.Treeview", height=min(max(len(rows), 1), height))
+            for col in columns:
+                tree.heading(col, text=col)
+                anchor = "center"
+                if col.lower().startswith("satış") or col.lower() in {"kategori", "ay"}:
+                    anchor = "w"
+                tree.column(col, anchor=anchor, width=160, stretch=True)
+            for row in rows:
+                tree.insert("", "end", values=row)
+            tree.pack(fill="both", expand=True)
+            return tree
+
+        def render_bar_chart(parent: ttk.Frame, labels: List[str], values: List[float], *, palette: Optional[List[str]] = None) -> None:
+            if not palette:
+                palette = [accent, secondary, COLORS.get("info", "#3b82f6"), COLORS.get("warning", "#f59e0b")]
+            fig = Figure(figsize=(4.6, 2.6), dpi=100)
+            ax = fig.add_subplot(111)
+            fig.patch.set_facecolor(card_bg)
+            ax.set_facecolor(card_bg)
+            norm_values = normalise_numeric(values)
+            bars = ax.bar(labels, norm_values, color=palette[: len(labels)])
+            ax.tick_params(colors=fg_color, labelrotation=0)
+            for spine in ax.spines.values():
+                spine.set_color(fg_color)
+            ax.set_ylabel("Tutar (€)", color=fg_color)
+            ax.set_title("Özet", color=fg_color, pad=8)
+            max_value = max(norm_values + [0]) if norm_values else 0
+            ax.set_ylim(0, max_value * 1.15 if max_value else 1)
+            for bar, value in zip(bars, norm_values):
+                ax.bar_label([bar], labels=[format_currency(value)], padding=4, color=fg_color, fontsize=9, rotation=90 if len(labels) > 6 else 0)
+            fig.tight_layout()
+            canvas = FigureCanvasTkAgg(fig, master=parent)
+            canvas.draw()
+            widget = canvas.get_tk_widget()
+            widget.pack(fill="both", expand=True)
+            self._report_canvases.append(canvas)
+
+        def render_grouped_chart(parent: ttk.Frame, grouped_df: pd.DataFrame) -> None:
+            if grouped_df.empty:
+                ttk.Label(parent, text="Veri bulunamadı", style="Card.TLabel").pack(fill="both", expand=True, pady=8)
+                return
+            labels = grouped_df["Sales Man"].tolist()
+            totals = normalise_numeric(grouped_df["Amount"].tolist())
+            cpi_vals = normalise_numeric(grouped_df["CPI"].tolist())
+            cps_vals = normalise_numeric(grouped_df["CPS"].tolist())
+            fig = Figure(figsize=(5.2, 3.0), dpi=100)
+            ax = fig.add_subplot(111)
+            fig.patch.set_facecolor(card_bg)
+            ax.set_facecolor(card_bg)
+            x = range(len(labels))
+            width = 0.25
+            bars1 = ax.bar([pos - width for pos in x], totals, width=width, color=accent, label="Toplam")
+            bars2 = ax.bar(x, cpi_vals, width=width, color=secondary, label="CPI")
+            bars3 = ax.bar([pos + width for pos in x], cps_vals, width=width, color=COLORS.get("info", "#3b82f6"), label="CPS")
+            ax.set_xticks(list(x))
+            ax.set_xticklabels(labels, rotation=20, ha="right", color=fg_color)
+            ax.tick_params(axis="y", colors=fg_color)
+            for spine in ax.spines.values():
+                spine.set_color(fg_color)
+            ax.set_ylabel("Tutar (€)", color=fg_color)
+            ax.legend(loc="upper right", frameon=False, fontsize=9)
+            for bar_group in (bars1, bars2, bars3):
+                for bar in bar_group:
+                    value = bar.get_height()
+                    ax.text(bar.get_x() + bar.get_width() / 2, value, format_currency(value), ha="center", va="bottom", fontsize=8, color=fg_color, rotation=90 if len(labels) > 6 else 0)
+            fig.tight_layout()
+            canvas = FigureCanvasTkAgg(fig, master=parent)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill="both", expand=True)
+            self._report_canvases.append(canvas)
+
+        def render_monthly_chart(parent: ttk.Frame, monthly_df: pd.DataFrame) -> None:
+            if monthly_df.empty:
+                ttk.Label(parent, text="Gelecek teslimatlar bulunamadı", style="Card.TLabel").pack(fill="both", expand=True, pady=8)
+                return
+            labels = monthly_df["Ay"].tolist()
+            totals = normalise_numeric(monthly_df["Amount"].tolist())
+            cpi_vals = normalise_numeric(monthly_df["CPI"].tolist())
+            cps_vals = normalise_numeric(monthly_df["CPS"].tolist())
+            fig = Figure(figsize=(5.4, 2.8), dpi=100)
+            ax = fig.add_subplot(111)
+            fig.patch.set_facecolor(card_bg)
+            ax.set_facecolor(card_bg)
+            ax.plot(labels, totals, marker="o", color=accent, label="Toplam")
+            ax.plot(labels, cpi_vals, marker="o", color=secondary, label="CPI")
+            ax.plot(labels, cps_vals, marker="o", color=COLORS.get("info", "#3b82f6"), label="CPS")
+            ax.set_xticks(range(len(labels)))
+            ax.set_xticklabels(labels, rotation=25, ha="right", color=fg_color)
+            ax.tick_params(axis="y", colors=fg_color)
+            for spine in ax.spines.values():
+                spine.set_color(fg_color)
+            ax.set_ylabel("Tutar (€)", color=fg_color)
+            ax.legend(loc="upper left", frameon=False, fontsize=9)
+            fig.tight_layout()
+            canvas = FigureCanvasTkAgg(fig, master=parent)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill="both", expand=True)
+            self._report_canvases.append(canvas)
+
+        # Genel satış özeti
+        overall_frame = ttk.LabelFrame(container, text="Genel Satış Özeti", style="Card.TLabelframe")
+        overall_frame.grid(row=0, column=0, sticky="nsew", pady=6)
+        overall_frame.grid_columnconfigure(0, weight=1)
+        overall_frame.grid_columnconfigure(1, weight=1)
+
+        summary_values = [
+            ("Toplam Satış Tutarı", data["Amount"].sum()),
+            ("CPI Satış Tutarı", data["CPI"].sum()),
+            ("CPS Satış Tutarı", data["CPS"].sum()),
+        ]
+        summary_rows = [(label, format_currency(value)) for label, value in summary_values]
+        summary_table = ttk.Frame(overall_frame, style="Card.TFrame")
+        summary_table.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        build_table(summary_table, ["Kategori", "Tutar"], summary_rows, height=4)
+        summary_chart = ttk.Frame(overall_frame, style="Card.TFrame")
+        summary_chart.grid(row=0, column=1, sticky="nsew")
+        render_bar_chart(summary_chart, [label for label, _ in summary_values], [value for _, value in summary_values])
+
+        # Satış mühendisleri özeti
+        sales_frame = ttk.LabelFrame(container, text="Satış Mühendisleri Dağılımı", style="Card.TLabelframe")
+        sales_frame.grid(row=1, column=0, sticky="nsew", pady=6)
+        sales_frame.grid_columnconfigure(0, weight=1)
+        sales_frame.grid_columnconfigure(1, weight=1)
+
+        grouped_sales = (
+            data.groupby("Sales Man")[["Amount", "CPI", "CPS"]]
+            .sum()
+            .reset_index()
+            .sort_values("Amount", ascending=False)
+        )
+        sales_rows = [
+            (
+                row["Sales Man"],
+                format_currency(row["Amount"]),
+                format_currency(row["CPI"]),
+                format_currency(row["CPS"]),
+            )
+            for _, row in grouped_sales.iterrows()
+        ]
+        sales_table = ttk.Frame(sales_frame, style="Card.TFrame")
+        sales_table.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        build_table(sales_table, ["Satış Mühendisi", "Toplam", "CPI", "CPS"], sales_rows, height=8)
+        sales_chart = ttk.Frame(sales_frame, style="Card.TFrame")
+        sales_chart.grid(row=0, column=1, sticky="nsew")
+        render_grouped_chart(sales_chart, grouped_sales)
+
+        # Faturalandırılan tutarlar
+        invoiced_frame = ttk.LabelFrame(container, text="Faturalandırılan Tutarlar", style="Card.TLabelframe")
+        invoiced_frame.grid(row=2, column=0, sticky="nsew", pady=6)
+        invoiced_frame.grid_columnconfigure(0, weight=1)
+        invoiced_frame.grid_columnconfigure(1, weight=1)
+
+        invoiced_df = data[data["Invoiced"] == "YES"]
+        invoiced_values = [
+            ("Faturalandırılan Toplam", invoiced_df["Invoiced Amount"].sum()),
+            ("CPI Tutarı", invoiced_df["CPI"].sum()),
+            ("CPS Tutarı", invoiced_df["CPS"].sum()),
+        ]
+        invoiced_rows = [(label, format_currency(value)) for label, value in invoiced_values]
+        invoiced_table = ttk.Frame(invoiced_frame, style="Card.TFrame")
+        invoiced_table.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        build_table(invoiced_table, ["Kategori", "Tutar"], invoiced_rows, height=4)
+        invoiced_chart = ttk.Frame(invoiced_frame, style="Card.TFrame")
+        invoiced_chart.grid(row=0, column=1, sticky="nsew")
+        render_bar_chart(invoiced_chart, [label for label, _ in invoiced_values], [value for _, value in invoiced_values], palette=[accent, secondary, COLORS.get("info", "#3b82f6")])
+
+        invoiced_sales_frame = ttk.LabelFrame(container, text="Satış Mühendisi Bazında Faturalama", style="Card.TLabelframe")
+        invoiced_sales_frame.grid(row=3, column=0, sticky="nsew", pady=6)
+        invoiced_sales_frame.grid_columnconfigure(0, weight=1)
+        invoiced_sales_frame.grid_columnconfigure(1, weight=1)
+
+        invoiced_grouped = (
+            invoiced_df.groupby("Sales Man")[["Invoiced Amount", "CPI", "CPS"]]
+            .sum()
+            .reset_index()
+            .sort_values("Invoiced Amount", ascending=False)
+        )
+        invoiced_sales_rows = [
+            (
+                row["Sales Man"],
+                format_currency(row["Invoiced Amount"]),
+                format_currency(row["CPI"]),
+                format_currency(row["CPS"]),
+            )
+            for _, row in invoiced_grouped.iterrows()
+        ]
+        invoiced_sales_table = ttk.Frame(invoiced_sales_frame, style="Card.TFrame")
+        invoiced_sales_table.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        build_table(invoiced_sales_table, ["Satış Mühendisi", "Faturalı", "CPI", "CPS"], invoiced_sales_rows, height=8)
+        invoiced_sales_chart = ttk.Frame(invoiced_sales_frame, style="Card.TFrame")
+        invoiced_sales_chart.grid(row=0, column=1, sticky="nsew")
+        if not invoiced_grouped.empty:
+            chart_df = invoiced_grouped.rename(columns={"Invoiced Amount": "Amount"})[["Sales Man", "Amount", "CPI", "CPS"]]
+            render_grouped_chart(invoiced_sales_chart, chart_df)
+        else:
+            ttk.Label(invoiced_sales_chart, text="Veri bulunamadı", style="Card.TLabel").pack(fill="both", expand=True, pady=8)
+
+        # Teslimat bazlı gelecek faturalama
+        forecast_frame = ttk.LabelFrame(container, text="Teslimat Tarihine Göre Faturalama Planı", style="Card.TLabelframe")
+        forecast_frame.grid(row=4, column=0, sticky="nsew", pady=6)
+        forecast_frame.grid_columnconfigure(0, weight=1)
+        forecast_frame.grid_columnconfigure(1, weight=1)
+
+        today = pd.Timestamp.today().normalize()
+        future_df = data[data["Date of Delivery"] >= today]
+        monthly = (
+            future_df.groupby(future_df["Date of Delivery"].dt.to_period("M"))[["Amount", "CPI", "CPS"]]
+            .sum()
+            .reset_index()
+        )
+        if not monthly.empty:
+            monthly["Ay"] = monthly["Date of Delivery"].dt.to_timestamp().dt.strftime("%Y %B")
+        else:
+            monthly = monthly.assign(Ay=pd.Series(dtype=str))
+        monthly_rows = [
+            (
+                row.get("Ay", "-"),
+                format_currency(row.get("Amount", 0)),
+                format_currency(row.get("CPI", 0)),
+                format_currency(row.get("CPS", 0)),
+            )
+            for _, row in monthly.iterrows()
+        ]
+        forecast_table = ttk.Frame(forecast_frame, style="Card.TFrame")
+        forecast_table.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        build_table(forecast_table, ["Ay", "Toplam", "CPI", "CPS"], monthly_rows, height=6)
+        forecast_chart = ttk.Frame(forecast_frame, style="Card.TFrame")
+        forecast_chart.grid(row=0, column=1, sticky="nsew")
+        render_monthly_chart(forecast_chart, monthly)
+
+        for idx in range(5):
+            container.grid_rowconfigure(idx, weight=1)
+    
     def generate_report(self) -> None:
         input_file = DATA_FILE
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_file = REPORT_DIR / f"sales_report_{timestamp}.xlsx"
+
+        filtered_df = self.get_filtered_dataframe()
+        if filtered_df.empty:
+            messagebox.showinfo(
+                "Bilgi",
+                "Raporlanacak veri bulunamadı. Excel çıktısı yine de oluşturulacaktır.",
+            )
+        else:
+            self._show_reporting_dashboard(filtered_df)
 
         progress_window = tk.Toplevel(self.root)
         progress_window.title("Rapor Oluşturuluyor")
