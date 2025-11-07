@@ -141,7 +141,13 @@ class SalesEntryApp:
         self._desoutter_logo_dark: Optional[tk.PhotoImage] = None
         self._desoutter_logo_light: Optional[tk.PhotoImage] = None
         self._desoutter_logo: Optional[tk.PhotoImage] = None
+        self._desoutter_logo_small_dark: Optional[tk.PhotoImage] = None
+        self._desoutter_logo_small_light: Optional[tk.PhotoImage] = None
+        self._active_backup_logo: Optional[tk.PhotoImage] = None
         self._report_canvases: List[FigureCanvasTkAggType] = []
+        self._backup_logo_animation_id: Optional[str] = None
+        self._backup_logo_animation_state = False
+        self._current_theme = DEFAULT_THEME
         
         self._config = self._load_config()
         self.sales_reps = self._load_sales_reps()
@@ -231,25 +237,42 @@ class SalesEntryApp:
         self._desoutter_logo_dark = self._load_logo_image("desoutter_logo_dark.png")
         self._desoutter_logo_light = self._load_logo_image("desoutter_logo_primary.png")
         self._desoutter_logo = self._desoutter_logo_light or self._desoutter_logo_dark
+        self._prepare_logo_variants()
+
+    def _prepare_logo_variants(self) -> None:
+        target_height = 32
+
+        def _scale_logo(image: Optional[tk.PhotoImage]) -> Optional[tk.PhotoImage]:
+            if image is None:
+                return None
+            height = image.height()
+            if height <= target_height:
+                return image
+            scale = max(1, round(height / target_height))
+            return image.subsample(scale, scale)
+
+        self._desoutter_logo_small_dark = _scale_logo(self._desoutter_logo_dark)
+        self._desoutter_logo_small_light = _scale_logo(self._desoutter_logo_light)
 
     def _apply_theme(self, theme: str) -> None:
+        self._current_theme = theme
         if theme == "dark":
             settings = {
-                "bg": COLORS["bg_dark"],
+                "bg": "#0b1120",
                 "fg": "#f9fafb",
-                "accent": COLORS["primary"],
-                "secondary": COLORS["secondary"],
-                "action_bg": "#374151",
-                "action_fg": "white",
-                "disabled_bg": "#4b5563",
-                "disabled_fg": "#9ca3af",
-                "card_bg": "#252b36",
-                "table_bg": "#1f2530",
-                "table_alt_bg": "#242b38",
+                "accent": "#7c3aed",
+                "secondary": "#5b21b6",
+                "action_bg": "#1e293b",
+                "action_fg": "#f9fafb",
+                "disabled_bg": "#334155",
+                "disabled_fg": "#94a3b8",
+                "card_bg": "#16213b",
+                "table_bg": "#111827",
+                "table_alt_bg": "#1e293b",
                 "table_fg": "#f8fafc",
                 "highlight_invoiced_bg": "#0f3d3e",
                 "highlight_invoiced_fg": "#ecfeff",
-                "brand_bg": "#1f2937",
+                "brand_bg": "#111827",
             }
         elif theme == DESOUTTER_THEME_KEY:
             settings = {
@@ -271,21 +294,21 @@ class SalesEntryApp:
             }
         else:
             settings = {
-                "bg": COLORS["bg_light"],
+                "bg": "#eef2ff",
                 "fg": COLORS["text_dark"],
                 "accent": COLORS["primary"],
                 "secondary": COLORS["secondary"],
-                "action_bg": "#e5e7eb",
+                "action_bg": "#e2e8f0",
                 "action_fg": COLORS["text_dark"],
-                "disabled_bg": "#d1d5db",
-                "disabled_fg": COLORS["text_light"],
+                "disabled_bg": "#cbd5f5",
+                "disabled_fg": "#6b7280",
                 "card_bg": "#ffffff",
                 "table_bg": "#ffffff",
-                "table_alt_bg": "#f3f4f6",
+                "table_alt_bg": "#e2e8f0",
                 "table_fg": COLORS["text_dark"],
                 "highlight_invoiced_bg": "#d1fae5",
                 "highlight_invoiced_fg": COLORS["text_dark"],
-                "brand_bg": COLORS["bg_light"],
+                "brand_bg": "#e0e7ff",
             }
 
         self._theme_settings = settings
@@ -437,6 +460,7 @@ class SalesEntryApp:
 
         self._update_tree_tag_styles()
         self._apply_branding(theme)
+        self._update_backup_controls()
 
     def _update_tree_tag_styles(self) -> None:
         if not hasattr(self, "tree"):
@@ -477,7 +501,9 @@ class SalesEntryApp:
         self.logo_container.configure(background=default_bg, padx=0, pady=0)
         if self.logo_container.winfo_manager():
             self.logo_container.pack_forget()
-        
+
+        self._update_backup_controls()
+
     def _ensure_directories(self) -> None:
         BACKUP_DIR.mkdir(exist_ok=True)
         REPORT_DIR.mkdir(exist_ok=True)
@@ -948,9 +974,88 @@ class SalesEntryApp:
         )
         self.quick_reset_button.pack(side="left", padx=4)
 
-        ttk.Button(bottom_frame, text="Yedeklemeyi Aç", command=self.open_backup_directory).pack(side="right")
+        self.backup_container = tk.Frame(bottom_frame, bd=0, highlightthickness=0)
+        self.backup_container.pack(side="right", padx=(8, 0))
+
+        self.backup_logo_label = tk.Label(
+            self.backup_container,
+            bd=0,
+            highlightthickness=0,
+            borderwidth=0,
+            background=self._theme_settings.get("bg", COLORS["bg_light"]),
+        )
+        self.backup_logo_label.pack(side="left", padx=(0, 6))
+
+        self.backup_button = ttk.Button(
+            self.backup_container,
+            text="Yedeklemeyi Aç",
+            command=self.open_backup_directory,
+        )
+        self.backup_button.pack(side="left")
+
+        self._update_backup_controls()
 
         self._update_button_states()
+
+    def _get_small_logo_for_theme(self, theme: Optional[str] = None) -> Optional[tk.PhotoImage]:
+        theme = theme or self._current_theme
+        if theme in {"dark", DESOUTTER_THEME_KEY}:
+            return self._desoutter_logo_small_light or self._desoutter_logo_small_dark
+        return self._desoutter_logo_small_dark or self._desoutter_logo_small_light
+
+    def _update_backup_controls(self) -> None:
+        if not hasattr(self, "backup_container"):
+            return
+        container_bg = self._theme_settings.get("bg", COLORS["bg_light"])
+        accent = self._theme_settings.get("accent", COLORS["primary"])
+        self.backup_container.configure(background=container_bg)
+        self.backup_logo_label.configure(background=container_bg, highlightbackground=accent, highlightcolor=accent)
+
+        logo_image = self._get_small_logo_for_theme()
+        if logo_image is not None:
+            self.backup_logo_label.configure(image=logo_image)
+            self.backup_logo_label.image = logo_image
+            self._active_backup_logo = logo_image
+        else:
+            self.backup_logo_label.configure(image="")
+            self.backup_logo_label.image = None
+            self._active_backup_logo = None
+
+        self._restart_backup_logo_animation()
+
+    def _restart_backup_logo_animation(self) -> None:
+        if not hasattr(self, "backup_logo_label"):
+            return
+        if self._backup_logo_animation_id is not None:
+            self.root.after_cancel(self._backup_logo_animation_id)
+            self._backup_logo_animation_id = None
+        self._backup_logo_animation_state = False
+        self._animate_backup_logo()
+
+    def _animate_backup_logo(self) -> None:
+        if not hasattr(self, "backup_logo_label") or not self.backup_logo_label.winfo_exists():
+            self._backup_logo_animation_id = None
+            return
+
+        accent = self._theme_settings.get("accent", COLORS["primary"])
+        off_bg = self._theme_settings.get("bg", COLORS["bg_light"])
+        glow_bg = self._theme_settings.get("brand_bg", off_bg)
+
+        if self._backup_logo_animation_state:
+            self.backup_logo_label.configure(
+                highlightthickness=0,
+                background=off_bg,
+            )
+        else:
+            self.backup_logo_label.configure(
+                highlightthickness=3,
+                highlightbackground=accent,
+                highlightcolor=accent,
+                background=glow_bg,
+            )
+
+        self._backup_logo_animation_state = not self._backup_logo_animation_state
+        self._backup_logo_animation_id = self.root.after(900, self._animate_backup_logo)
 
     # ----------------------------------------------------------------- helpers
     def _set_date_field(self, field: str, date_value: datetime) -> None:
