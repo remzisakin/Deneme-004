@@ -404,6 +404,167 @@ def write_dataframe(
     apply_table_formatting(sheet, startrow + 1, startcol + 1, end_row, end_col)
 
 
+def _format_currency_display(value) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    formatted = f"{number:,.2f}"
+    formatted = formatted.replace(",", "·").replace(".", ",").replace("·", ".")
+    return f"{formatted} €"
+
+
+def _format_detail_value(column: str, value) -> str:
+    if pd.isna(value):
+        return "-"
+    if column in DATE_COLUMNS:
+        if isinstance(value, datetime):
+            return value.strftime("%d.%m.%Y")
+        try:
+            return pd.to_datetime(value).strftime("%d.%m.%Y")
+        except Exception:
+            return str(value)
+    if column == "Total Discount":
+        try:
+            percentage = float(value) * 100
+        except (TypeError, ValueError):
+            return str(value)
+        return f"{percentage:.1f}%"
+    if column in CURRENCY_COLUMNS:
+        return _format_currency_display(value)
+    if column == "Invoiced":
+        return "Evet" if str(value).strip().upper() in {"YES", "TRUE", "EVET", "1"} else "Hayır"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return _format_currency_display(value)
+    return str(value)
+
+
+def _sanitise_sheet_title(base: str, existing: set[str]) -> str:
+    cleaned = "".join("_" if ch in "[]:*?/\\" else ch for ch in base)
+    cleaned = cleaned.strip() or "Kayit"
+    cleaned = cleaned[:31]
+    candidate = cleaned
+    suffix = 1
+    while candidate in existing:
+        suffix_text = f"_{suffix}"
+        candidate = f"{cleaned[: 31 - len(suffix_text)]}{suffix_text}"
+        suffix += 1
+    existing.add(candidate)
+    return candidate
+
+
+def _add_detail_sheets(workbook, df: pd.DataFrame) -> None:
+    existing = set(workbook.sheetnames)
+    for idx, (_, row) in enumerate(df.reset_index(drop=True).iterrows(), start=1):
+        customer_name = str(row.get("Customer Name", "") or "").strip()
+        base_title = f"Kayıt {idx:03d}"
+        if customer_name:
+            base_title = f"{base_title} {customer_name}"[:31]
+        sheet_name = _sanitise_sheet_title(base_title, existing)
+        sheet = workbook.create_sheet(title=sheet_name)
+        sheet.sheet_view.showGridLines = False
+
+        sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+        title = customer_name or "Müşteri Bilgisi Yok"
+        title_cell = sheet.cell(row=1, column=1, value=f"Kayıt #{idx} — {title}")
+        title_cell.font = Font(size=14, bold=True)
+        title_cell.alignment = Alignment(horizontal="center", vertical="center")
+        sheet.row_dimensions[1].height = 26
+
+        detail_header_row = 3
+        sheet.cell(row=detail_header_row, column=1, value="Alan")
+        sheet.cell(row=detail_header_row, column=2, value="Değer")
+
+        for row_offset, column_name in enumerate(df.columns, start=detail_header_row + 1):
+            sheet.cell(row=row_offset, column=1, value=column_name)
+            value_cell = sheet.cell(
+                row=row_offset,
+                column=2,
+                value=_format_detail_value(column_name, row[column_name]),
+            )
+            value_cell.alignment = Alignment(horizontal="left", vertical="center")
+
+        detail_end_row = detail_header_row + len(df.columns)
+        apply_table_formatting(sheet, detail_header_row, 1, detail_end_row, 2)
+        sheet.column_dimensions["A"].width = 28
+        sheet.column_dimensions["B"].width = 48
+
+        metrics = [
+            ("Toplam Tutar", row.get("Amount", 0)),
+            ("CPI", row.get("CPI", 0)),
+            ("CPS", row.get("CPS", 0)),
+            ("Fatura Tutarı", row.get("Invoiced Amount", 0)),
+        ]
+        metric_header_row = detail_header_row
+        sheet.cell(row=metric_header_row, column=4, value="Metrik")
+        sheet.cell(row=metric_header_row, column=5, value="Tutar")
+
+        for metric_offset, (label, metric_value) in enumerate(metrics, start=metric_header_row + 1):
+            sheet.cell(row=metric_offset, column=4, value=label)
+            if pd.isna(metric_value):
+                numeric_value = 0.0
+            else:
+                try:
+                    numeric_value = float(metric_value)
+                except (TypeError, ValueError):
+                    numeric_value = 0.0
+            value_cell = sheet.cell(row=metric_offset, column=5, value=numeric_value)
+            value_cell.number_format = "#,##0.00"
+            value_cell.alignment = Alignment(horizontal="right", vertical="center")
+
+        metric_end_row = metric_header_row + len(metrics)
+        apply_table_formatting(sheet, metric_header_row, 4, metric_end_row, 5)
+        sheet.column_dimensions["D"].width = 22
+        sheet.column_dimensions["E"].width = 18
+
+        chart = BarChart()
+        chart.style = 4
+        chart.title = "Satış Bileşenleri"
+        chart.y_axis.title = "Tutar (€)"
+        chart_data = Reference(sheet, min_col=5, min_row=metric_header_row, max_row=metric_end_row)
+        chart_categories = Reference(sheet, min_col=4, min_row=metric_header_row + 1, max_row=metric_end_row)
+        chart.add_data(chart_data, titles_from_data=True)
+        chart.set_categories(chart_categories)
+        chart.height = 8.5
+        chart.width = 16
+        sheet.add_chart(chart, f"G{metric_header_row}")
+
+        status_row = detail_end_row + 2
+        status_title = sheet.cell(row=status_row, column=1, value="Durum Özeti")
+        status_title.font = Font(bold=True)
+        invoiced_text = _format_detail_value("Invoiced", row.get("Invoiced"))
+        forecast_text = str(row.get("QI Forecast", "") or "-")
+        status_value = sheet.cell(
+            row=status_row,
+            column=2,
+            value=f"Faturalama: {invoiced_text} | QI Forecast: {forecast_text}",
+        )
+        status_value.alignment = Alignment(horizontal="left", vertical="center")
+        status_value.fill = PatternFill(start_color="FFF4CE", end_color="FFF4CE", fill_type="solid")
+        thin = Side(border_style="thin", color="E0E0E0")
+        status_value.border = Border(top=thin, bottom=thin, left=thin, right=thin)
+
+
+def _add_summary_visuals(workbook, summary_length: int) -> None:
+    if "Özet Dashboard" not in workbook.sheetnames or summary_length <= 0:
+        return
+    sheet = workbook["Özet Dashboard"]
+    max_summary_row = summary_length + 1
+    if sheet.max_row < max_summary_row:
+        return
+
+    chart = BarChart()
+    chart.style = 10
+    chart.title = "Genel CPI Özeti"
+    chart.y_axis.title = "Tutar (€)"
+    chart.width = 18
+    chart.height = 8
+    data = Reference(sheet, min_col=2, min_row=1, max_row=max_summary_row)
+    categories = Reference(sheet, min_col=1, min_row=2, max_row=max_summary_row)
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(categories)
+    sheet.add_chart(chart, "E2")
+
 def generate_sales_report(
     input_file: str,
     output_file: str,
@@ -416,7 +577,7 @@ def generate_sales_report(
             progress_callback(step / total_steps, message)
         print(message)
 
-    total_steps = 6
+    total_steps = 7
     report_progress(1, total_steps, "Veri okunuyor...")
     df = read_and_clean_data(input_file)
     report_progress(2, total_steps, f"Toplam kayıt sayısı: {len(df)}")
@@ -496,8 +657,12 @@ def generate_sales_report(
 
         write_dataframe(writer, df, "Detay Veri", index=False)
 
+    report_progress(4, total_steps, "Satır bazlı raporlar oluşturuluyor...")
     workbook = load_workbook(output_file)
+    _add_detail_sheets(workbook, df)
+    _add_summary_visuals(workbook, len(summary_metrics))
 
+    report_progress(5, total_steps, "Grafikler ekleniyor...")
     _add_category_chart(
         workbook, "CPI Faturalanan Raporu", len(invoiced_pivot.columns)
     )
@@ -508,10 +673,8 @@ def generate_sales_report(
 
     workbook.save(output_file)
 
-    report_progress(4, total_steps, "Grafikler ekleniyor...")
-
-    report_progress(5, total_steps, "Rapor oluşturuldu.")
-    report_progress(6, total_steps, f"Rapor kaydedildi: {output_file}")
+    report_progress(6, total_steps, "Rapor oluşturuldu.")
+    report_progress(7, total_steps, f"Rapor kaydedildi: {output_file}")
     print(f"Faturalanan kayıt sayısı: {len(invoiced_df)}")
     print(f"Faturalanmayan kayıt sayısı: {len(not_invoiced_df)}")
     print(f"QI Forecast = YES kayıt sayısı: {len(won_df)}")

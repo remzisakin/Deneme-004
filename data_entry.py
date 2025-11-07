@@ -138,6 +138,8 @@ class SalesEntryApp:
         self._updating_cpi_field = False
         self._suspend_delivery_autofill = False
         self._theme_settings: Dict[str, str] = {}
+        self._desoutter_logo_dark: Optional[tk.PhotoImage] = None
+        self._desoutter_logo_light: Optional[tk.PhotoImage] = None
         self._desoutter_logo: Optional[tk.PhotoImage] = None
         self._report_canvases: List[FigureCanvasTkAggType] = []
         
@@ -216,43 +218,57 @@ class SalesEntryApp:
     def _get_sales_rep_options(self) -> List[str]:
         return [*self.sales_reps, OTHER_SALES_REP_OPTION]
 
+    def _load_logo_image(self, filename: str) -> Optional[tk.PhotoImage]:
+        path = ASSETS_DIR / filename
+        if not path.exists():
+            return None
+        try:
+            return tk.PhotoImage(file=str(path))
+        except tk.TclError:
+            return None
+
     def _load_theme_assets(self) -> None:
-        logo_path = ASSETS_DIR / "desoutter_logo_dark.png"
-        if logo_path.exists():
-            try:
-                self._desoutter_logo = tk.PhotoImage(file=str(logo_path))
-            except tk.TclError:
-                self._desoutter_logo = None
+        self._desoutter_logo_dark = self._load_logo_image("desoutter_logo_dark.png")
+        self._desoutter_logo_light = self._load_logo_image("desoutter_logo_primary.png")
+        self._desoutter_logo = self._desoutter_logo_light or self._desoutter_logo_dark
 
     def _apply_theme(self, theme: str) -> None:
         if theme == "dark":
-                settings = {
+            settings = {
                 "bg": COLORS["bg_dark"],
-                "fg": "white",
+                "fg": "#f9fafb",
                 "accent": COLORS["primary"],
                 "secondary": COLORS["secondary"],
                 "action_bg": "#374151",
                 "action_fg": "white",
                 "disabled_bg": "#4b5563",
                 "disabled_fg": "#9ca3af",
-                "card_bg": "#2a2f3a",
+                "card_bg": "#252b36",
                 "table_bg": "#1f2530",
-                "table_fg": "#f4f4f5",
+                "table_alt_bg": "#242b38",
+                "table_fg": "#f8fafc",
+                "highlight_invoiced_bg": "#0f3d3e",
+                "highlight_invoiced_fg": "#ecfeff",
+                "brand_bg": "#1f2937",
             }
         elif theme == DESOUTTER_THEME_KEY:
             settings = {
-                "bg": "#101015",
-                "fg": "#f3f4f6",
+                "bg": "#0f172a",
+                "fg": "#f8fafc",
                 "accent": "#E4002B",
                 "secondary": "#b30f27",
-                "action_bg": "#1e1e26",
-                "action_fg": "#f3f4f6",
-                "disabled_bg": "#2b2b35",
+                "action_bg": "#1d2435",
+                "action_fg": "#f8fafc",
+                "disabled_bg": "#2a3247",
                 "disabled_fg": "#9ca3af",
-                "card_bg": "#16161f",
-                "table_bg": "#1d1d27",
-                "table_fg": "#f3f4f6",
-            }        
+                "card_bg": "#172036",
+                "table_bg": "#111a2b",
+                "table_alt_bg": "#17223a",
+                "table_fg": "#f8fafc",
+                "highlight_invoiced_bg": "#14532d",
+                "highlight_invoiced_fg": "#dcfce7",
+                "brand_bg": "#f8fafc",
+            }
         else:
             settings = {
                 "bg": COLORS["bg_light"],
@@ -265,7 +281,11 @@ class SalesEntryApp:
                 "disabled_fg": COLORS["text_light"],
                 "card_bg": "#ffffff",
                 "table_bg": "#ffffff",
+                "table_alt_bg": "#f3f4f6",
                 "table_fg": COLORS["text_dark"],
+                "highlight_invoiced_bg": "#d1fae5",
+                "highlight_invoiced_fg": COLORS["text_dark"],
+                "brand_bg": COLORS["bg_light"],
             }
 
         self._theme_settings = settings
@@ -414,22 +434,49 @@ class SalesEntryApp:
             background=settings["card_bg"],
             foreground=settings["fg"],
         )
-        
+
+        self._update_tree_tag_styles()
         self._apply_branding(theme)
 
-    def _apply_branding(self, theme: str) -> None:
-        if not hasattr(self, "logo_label"):
+    def _update_tree_tag_styles(self) -> None:
+        if not hasattr(self, "tree"):
             return
-        if theme == DESOUTTER_THEME_KEY and self._desoutter_logo is not None:
-            bg = self._theme_settings.get("bg", COLORS["bg_dark"])
-            self.logo_label.configure(image=self._desoutter_logo, background=bg)
-            if not self.logo_label.winfo_manager():
-                self.logo_label.pack(side="right", padx=(12, 0))
-        else:
-            bg = self._theme_settings.get("bg", COLORS["bg_light"])
-            self.logo_label.configure(image="", background=bg)
-            if self.logo_label.winfo_manager():
-                self.logo_label.pack_forget()
+        table_bg = self._theme_settings.get("table_bg", "#ffffff")
+        alt_bg = self._theme_settings.get("table_alt_bg", table_bg)
+        table_fg = self._theme_settings.get("table_fg", COLORS["text_dark"])
+        highlight_bg = self._theme_settings.get("highlight_invoiced_bg", "#14532d")
+        highlight_fg = self._theme_settings.get("highlight_invoiced_fg", "#dcfce7")
+        self.tree.tag_configure("odd", background=table_bg, foreground=table_fg)
+        self.tree.tag_configure("even", background=alt_bg, foreground=table_fg)
+        self.tree.tag_configure("invoiced", background=highlight_bg, foreground=highlight_fg)
+
+    def _apply_branding(self, theme: str) -> None:
+        if not hasattr(self, "logo_label") or not hasattr(self, "logo_container"):
+            return
+
+        default_bg = self._theme_settings.get("bg", COLORS["bg_light"])
+        self.logo_container.configure(background=default_bg)
+
+        if theme == DESOUTTER_THEME_KEY:
+            logo_image = self._desoutter_logo_light or self._desoutter_logo_dark
+            if logo_image is not None:
+                brand_bg = self._theme_settings.get("brand_bg", default_bg)
+                self.logo_container.configure(background=brand_bg, padx=8, pady=6)
+                self.logo_label.configure(
+                    image=logo_image,
+                    background=brand_bg,
+                    padx=8,
+                    pady=4,
+                )
+                self.logo_label.image = logo_image
+                if not self.logo_container.winfo_manager():
+                    self.logo_container.pack(side="right", padx=(12, 0))
+                return
+
+        self.logo_label.configure(image="", background=default_bg, padx=0, pady=0)
+        self.logo_container.configure(background=default_bg, padx=0, pady=0)
+        if self.logo_container.winfo_manager():
+            self.logo_container.pack_forget()
         
     def _ensure_directories(self) -> None:
         BACKUP_DIR.mkdir(exist_ok=True)
@@ -522,11 +569,16 @@ class SalesEntryApp:
         self.header_frame.pack(fill="x", padx=16, pady=(16, 8))
 
         ttk.Label(self.header_frame, text=APP_TITLE, style="Header.TLabel").pack(side="left")
+
+        self.logo_container = tk.Frame(self.header_frame, bd=0, highlightthickness=0, borderwidth=0)
+        self.logo_container.pack(side="right", padx=(12, 0))
+        self.logo_label = tk.Label(self.logo_container, bd=0, highlightthickness=0, borderwidth=0)
+        self.logo_label.pack()
+        self.logo_container.pack_forget()
+
         self.file_info_var = tk.StringVar(value=f"Dosya: {DATA_FILE} | Kayıt: 0")
         self.file_info_label = ttk.Label(self.header_frame, textvariable=self.file_info_var)
         self.file_info_label.pack(side="right")
-        self.logo_label = tk.Label(self.header_frame, bd=0, highlightthickness=0, borderwidth=0)
-        self.logo_label.pack_forget()
         self._apply_branding(self._config.get("theme", DEFAULT_THEME))
         
         self.content_frame = ttk.Frame(self.root)
@@ -810,8 +862,6 @@ class SalesEntryApp:
         )
         self.tree.pack(side="left", fill="both", expand=True)
 
-        self.tree.tag_configure("invoiced", background="#d1fae5")
-
         display_names = {
             "Invoiced Amount": "CPI Tutarı",
             "Delivery Note": "Notlar",
@@ -835,6 +885,8 @@ class SalesEntryApp:
 
         self.tree.bind("<<TreeviewSelect>>", lambda event: self.populate_form_from_selection())
         self.tree.bind("<Button-3>", self._show_context_menu)
+
+        self._update_tree_tag_styles()
 
         pagination_frame = ttk.Frame(self.table_frame)
         pagination_frame.pack(fill="x", pady=6)
@@ -1348,6 +1400,8 @@ class SalesEntryApp:
         end = start + PAGE_SIZE
         page_df = df.iloc[start:end]
 
+        self._update_tree_tag_styles()
+
         for idx, (_, row) in enumerate(page_df.iterrows(), start=start + 1):
             formatted_values: List[str] = []
             for col in COLUMNS:
@@ -1358,10 +1412,10 @@ class SalesEntryApp:
                 else:
                     formatted_values.append(self._format_value(row[col]))
             values = [idx] + formatted_values
-            tags: Tuple[str, ...] = ()
+            row_tags: List[str] = ["even" if idx % 2 == 0 else "odd"]
             if str(row.get("Invoiced", "")).upper() == "YES":
-                tags = ("invoiced",)
-            self.tree.insert("", "end", values=values, tags=tags)
+                row_tags.insert(0, "invoiced")
+            self.tree.insert("", "end", values=values, tags=tuple(row_tags))
 
         self.page_var.set(f"Sayfa {self.current_page}/{self.total_pages}")
         self.file_info_var.set(f"Dosya: {DATA_FILE} | Kayıt: {len(self.df)}")
