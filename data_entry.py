@@ -145,8 +145,6 @@ class SalesEntryApp:
         self._desoutter_logo_small_light: Optional[tk.PhotoImage] = None
         self._active_backup_logo: Optional[tk.PhotoImage] = None
         self._report_canvases: List[FigureCanvasTkAggType] = []
-        self._backup_logo_animation_id: Optional[str] = None
-        self._backup_logo_animation_state = False
         self._current_theme = DEFAULT_THEME
         
         self._config = self._load_config()
@@ -482,20 +480,11 @@ class SalesEntryApp:
         self.logo_container.configure(background=default_bg)
 
         if theme == DESOUTTER_THEME_KEY:
-            logo_image = self._desoutter_logo_light or self._desoutter_logo_dark
-            if logo_image is not None:
-                brand_bg = self._theme_settings.get("brand_bg", default_bg)
-                self.logo_container.configure(background=brand_bg, padx=8, pady=6)
-                self.logo_label.configure(
-                    image=logo_image,
-                    background=brand_bg,
-                    padx=8,
-                    pady=4,
-                )
-                self.logo_label.image = logo_image
-                if not self.logo_container.winfo_manager():
-                    self.logo_container.pack(side="right", padx=(12, 0))
-                return
+            self.logo_label.configure(image="", background=default_bg, padx=0, pady=0)
+            self.logo_container.configure(background=default_bg, padx=0, pady=0)
+            if self.logo_container.winfo_manager():
+                self.logo_container.pack_forget()
+            return
 
         self.logo_label.configure(image="", background=default_bg, padx=0, pady=0)
         self.logo_container.configure(background=default_bg, padx=0, pady=0)
@@ -1009,53 +998,24 @@ class SalesEntryApp:
         container_bg = self._theme_settings.get("bg", COLORS["bg_light"])
         accent = self._theme_settings.get("accent", COLORS["primary"])
         self.backup_container.configure(background=container_bg)
-        self.backup_logo_label.configure(background=container_bg, highlightbackground=accent, highlightcolor=accent)
+        self.backup_logo_label.configure(
+            background=container_bg,
+            highlightbackground=accent,
+            highlightcolor=accent,
+            highlightthickness=1 if self._active_backup_logo else 0,
+        )
 
         logo_image = self._get_small_logo_for_theme()
         if logo_image is not None:
             self.backup_logo_label.configure(image=logo_image)
             self.backup_logo_label.image = logo_image
             self._active_backup_logo = logo_image
+            self.backup_logo_label.configure(highlightthickness=1)
         else:
             self.backup_logo_label.configure(image="")
             self.backup_logo_label.image = None
             self._active_backup_logo = None
-
-        self._restart_backup_logo_animation()
-
-    def _restart_backup_logo_animation(self) -> None:
-        if not hasattr(self, "backup_logo_label"):
-            return
-        if self._backup_logo_animation_id is not None:
-            self.root.after_cancel(self._backup_logo_animation_id)
-            self._backup_logo_animation_id = None
-        self._backup_logo_animation_state = False
-        self._animate_backup_logo()
-
-    def _animate_backup_logo(self) -> None:
-        if not hasattr(self, "backup_logo_label") or not self.backup_logo_label.winfo_exists():
-            self._backup_logo_animation_id = None
-            return
-
-        accent = self._theme_settings.get("accent", COLORS["primary"])
-        off_bg = self._theme_settings.get("bg", COLORS["bg_light"])
-        glow_bg = self._theme_settings.get("brand_bg", off_bg)
-
-        if self._backup_logo_animation_state:
-            self.backup_logo_label.configure(
-                highlightthickness=0,
-                background=off_bg,
-            )
-        else:
-            self.backup_logo_label.configure(
-                highlightthickness=3,
-                highlightbackground=accent,
-                highlightcolor=accent,
-                background=glow_bg,
-            )
-
-        self._backup_logo_animation_state = not self._backup_logo_animation_state
-        self._backup_logo_animation_id = self.root.after(900, self._animate_backup_logo)
+            self.backup_logo_label.configure(highlightthickness=0)
 
     # ----------------------------------------------------------------- helpers
     def _set_date_field(self, field: str, date_value: datetime) -> None:
@@ -1517,9 +1477,8 @@ class SalesEntryApp:
                 else:
                     formatted_values.append(self._format_value(row[col]))
             values = [idx] + formatted_values
-            row_tags: List[str] = ["even" if idx % 2 == 0 else "odd"]
-            if str(row.get("Invoiced", "")).upper() == "YES":
-                row_tags.insert(0, "invoiced")
+            is_invoiced = str(row.get("Invoiced", "")).upper() == "YES"
+            row_tags: List[str] = ["invoiced" if is_invoiced else ("even" if idx % 2 == 0 else "odd")]
             self.tree.insert("", "end", values=values, tags=tuple(row_tags))
 
         self.page_var.set(f"Sayfa {self.current_page}/{self.total_pages}")
@@ -2048,13 +2007,7 @@ class SalesEntryApp:
 
     # ------------------------------------------------------------- reporting
     def _show_reporting_dashboard(self, df: pd.DataFrame) -> None:
-        if Figure is None or FigureCanvasTkAgg is None:
-            messagebox.showerror(
-                "Eksik Bileşen",
-                "Grafikleri görüntülemek için 'matplotlib' kütüphanesinin yüklü olması gerekir.\n"
-                "Lütfen 'pip install matplotlib' komutu ile kurulumu tamamlayın.",
-            )
-            return
+        matplotlib_available = Figure is not None and FigureCanvasTkAgg is not None
         dashboard = tk.Toplevel(self.root)
         dashboard.title("Satış Raporu Paneli")
         dashboard.geometry("1240x900")
@@ -2112,30 +2065,127 @@ class SalesEntryApp:
             tree.pack(fill="both", expand=True)
             return tree
 
+        def draw_canvas_bar_chart(parent: ttk.Frame, labels: List[str], values: List[float], palette: List[str]) -> None:
+            canvas = tk.Canvas(parent, background=card_bg, highlightthickness=0, bd=0)
+            canvas.pack(fill="both", expand=True)
+            if not labels:
+                canvas.create_text(200, 60, text="Veri bulunamadı", fill=fg_color, font=("Segoe UI", 10, "bold"))
+                return
+            width = 420
+            bar_height = 24
+            padding = 18
+            height = padding * 2 + len(values) * (bar_height + padding)
+            canvas.configure(width=width, height=max(height, 140))
+            max_value = max(values or [0]) or 1
+            for idx, (label, value) in enumerate(zip(labels, values)):
+                top = padding + idx * (bar_height + padding)
+                left = 140
+                usable_width = width - left - 30
+                ratio = value / max_value if max_value else 0
+                right = left + max(usable_width * ratio, 4)
+                color = palette[idx % len(palette)]
+                canvas.create_text(10, top + bar_height / 2, text=label, fill=fg_color, anchor="w", font=("Segoe UI", 10, "bold"))
+                canvas.create_rectangle(left, top, right, top + bar_height, fill=color, width=0)
+                canvas.create_text(right + 6, top + bar_height / 2, text=format_currency(value), fill=fg_color, anchor="w", font=("Segoe UI", 9))
+
+        def draw_canvas_line_chart(
+            parent: ttk.Frame,
+            labels: List[str],
+            series: List[List[float]],
+            colors_list: List[str],
+            legends: List[str],
+        ) -> None:
+            canvas = tk.Canvas(parent, background=card_bg, highlightthickness=0, bd=0)
+            canvas.pack(fill="both", expand=True)
+            width = 520
+            height = 260
+            canvas.configure(width=width, height=height)
+            if not labels:
+                canvas.create_text(width / 2, height / 2, text="Veri bulunamadı", fill=fg_color, font=("Segoe UI", 11, "bold"))
+                return
+            margin = 40
+            axis_left = margin
+            axis_right = width - margin
+            axis_bottom = height - margin
+            axis_top = margin
+            usable_height = axis_bottom - axis_top
+            max_value = 0.0
+            for values in series:
+                if values:
+                    max_value = max(max_value, max(values))
+            if max_value <= 0:
+                max_value = 1.0
+            canvas.create_line(axis_left, axis_bottom, axis_right, axis_bottom, fill=fg_color, width=2)
+            canvas.create_line(axis_left, axis_bottom, axis_left, axis_top, fill=fg_color, width=2)
+            step_x = (axis_right - axis_left) / max(len(labels) - 1, 1)
+            x_positions: List[float] = []
+            for idx, label in enumerate(labels):
+                x = axis_left + idx * step_x if len(labels) > 1 else (axis_left + axis_right) / 2
+                x_positions.append(x)
+                canvas.create_line(x, axis_bottom, x, axis_bottom + 4, fill=fg_color)
+                canvas.create_text(x, axis_bottom + 14, text=label, fill=fg_color, anchor="n", font=("Segoe UI", 9))
+            usable_colors = colors_list or [accent, secondary, COLORS.get("info", "#3b82f6")]
+            for color, values, legend_text in zip(usable_colors, series, legends):
+                if not values:
+                    continue
+                padded_values = list(values) + [0.0] * max(0, len(labels) - len(values))
+                points: List[Tuple[float, float]] = []
+                for x, value in zip(x_positions, padded_values):
+                    ratio = value / max_value if max_value else 0
+                    y = axis_bottom - ratio * usable_height
+                    points.append((x, y))
+                if len(points) == 1:
+                    x, y = points[0]
+                    canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill=color, outline=color)
+                else:
+                    for start, end in zip(points, points[1:]):
+                        canvas.create_line(*start, *end, fill=color, width=2, smooth=True)
+                for (x, y), value in zip(points, padded_values):
+                    canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill=color, outline=card_bg)
+                    canvas.create_text(x, y - 8, text=format_currency(value), fill=color, font=("Segoe UI", 8), anchor="s")
+            legend_x = axis_left
+            legend_y = axis_top - 18
+            for color, legend_text in zip(usable_colors, legends):
+                canvas.create_rectangle(legend_x, legend_y, legend_x + 12, legend_y + 12, fill=color, width=0)
+                canvas.create_text(legend_x + 18, legend_y + 6, text=legend_text, fill=fg_color, anchor="w", font=("Segoe UI", 9))
+                legend_x += 120
+
         def render_bar_chart(parent: ttk.Frame, labels: List[str], values: List[float], *, palette: Optional[List[str]] = None) -> None:
             if not palette:
                 palette = [accent, secondary, COLORS.get("info", "#3b82f6"), COLORS.get("warning", "#f59e0b")]
-            fig = Figure(figsize=(4.6, 2.6), dpi=100)
-            ax = fig.add_subplot(111)
-            fig.patch.set_facecolor(card_bg)
-            ax.set_facecolor(card_bg)
             norm_values = normalise_numeric(values)
-            bars = ax.bar(labels, norm_values, color=palette[: len(labels)])
-            ax.tick_params(colors=fg_color, labelrotation=0)
-            for spine in ax.spines.values():
-                spine.set_color(fg_color)
-            ax.set_ylabel("Tutar (€)", color=fg_color)
-            ax.set_title("Özet", color=fg_color, pad=8)
-            max_value = max(norm_values + [0]) if norm_values else 0
-            ax.set_ylim(0, max_value * 1.15 if max_value else 1)
-            for bar, value in zip(bars, norm_values):
-                ax.bar_label([bar], labels=[format_currency(value)], padding=4, color=fg_color, fontsize=9, rotation=90 if len(labels) > 6 else 0)
-            fig.tight_layout()
-            canvas = FigureCanvasTkAgg(fig, master=parent)
-            canvas.draw()
-            widget = canvas.get_tk_widget()
-            widget.pack(fill="both", expand=True)
-            self._report_canvases.append(canvas)
+            if not norm_values:
+                ttk.Label(parent, text="Veri bulunamadı", style="Card.TLabel").pack(fill="both", expand=True, pady=8)
+                return
+            if matplotlib_available:
+                fig = Figure(figsize=(4.6, 2.6), dpi=100)
+                ax = fig.add_subplot(111)
+                fig.patch.set_facecolor(card_bg)
+                ax.set_facecolor(card_bg)
+                bars = ax.bar(labels, norm_values, color=palette[: len(labels)])
+                ax.tick_params(colors=fg_color, labelrotation=0)
+                for spine in ax.spines.values():
+                    spine.set_color(fg_color)
+                ax.set_ylabel("Tutar (€)", color=fg_color)
+                ax.set_title("Özet", color=fg_color, pad=8)
+                max_value = max(norm_values + [0]) if norm_values else 0
+                ax.set_ylim(0, max_value * 1.15 if max_value else 1)
+                for bar, value in zip(bars, norm_values):
+                    ax.bar_label(
+                        [bar],
+                        labels=[format_currency(value)],
+                        padding=4,
+                        color=fg_color,
+                        fontsize=9,
+                        rotation=90 if len(labels) > 6 else 0,
+                    )
+                fig.tight_layout()
+                canvas = FigureCanvasTkAgg(fig, master=parent)
+                canvas.draw()
+                canvas.get_tk_widget().pack(fill="both", expand=True)
+                self._report_canvases.append(canvas)
+            else:
+                draw_canvas_bar_chart(parent, labels, norm_values, palette)
 
         def render_grouped_chart(parent: ttk.Frame, grouped_df: pd.DataFrame) -> None:
             if grouped_df.empty:
@@ -2145,31 +2195,55 @@ class SalesEntryApp:
             totals = normalise_numeric(grouped_df["Amount"].tolist())
             cpi_vals = normalise_numeric(grouped_df["CPI"].tolist())
             cps_vals = normalise_numeric(grouped_df["CPS"].tolist())
-            fig = Figure(figsize=(5.2, 3.0), dpi=100)
-            ax = fig.add_subplot(111)
-            fig.patch.set_facecolor(card_bg)
-            ax.set_facecolor(card_bg)
-            x = range(len(labels))
-            width = 0.25
-            bars1 = ax.bar([pos - width for pos in x], totals, width=width, color=accent, label="Toplam")
-            bars2 = ax.bar(x, cpi_vals, width=width, color=secondary, label="CPI")
-            bars3 = ax.bar([pos + width for pos in x], cps_vals, width=width, color=COLORS.get("info", "#3b82f6"), label="CPS")
-            ax.set_xticks(list(x))
-            ax.set_xticklabels(labels, rotation=20, ha="right", color=fg_color)
-            ax.tick_params(axis="y", colors=fg_color)
-            for spine in ax.spines.values():
-                spine.set_color(fg_color)
-            ax.set_ylabel("Tutar (€)", color=fg_color)
-            ax.legend(loc="upper right", frameon=False, fontsize=9)
-            for bar_group in (bars1, bars2, bars3):
-                for bar in bar_group:
-                    value = bar.get_height()
-                    ax.text(bar.get_x() + bar.get_width() / 2, value, format_currency(value), ha="center", va="bottom", fontsize=8, color=fg_color, rotation=90 if len(labels) > 6 else 0)
-            fig.tight_layout()
-            canvas = FigureCanvasTkAgg(fig, master=parent)
-            canvas.draw()
-            canvas.get_tk_widget().pack(fill="both", expand=True)
-            self._report_canvases.append(canvas)
+            if matplotlib_available:
+                fig = Figure(figsize=(5.2, 3.0), dpi=100)
+                ax = fig.add_subplot(111)
+                fig.patch.set_facecolor(card_bg)
+                ax.set_facecolor(card_bg)
+                x = range(len(labels))
+                width = 0.25
+                bars1 = ax.bar([pos - width for pos in x], totals, width=width, color=accent, label="Toplam")
+                bars2 = ax.bar(x, cpi_vals, width=width, color=secondary, label="CPI")
+                bars3 = ax.bar(
+                    [pos + width for pos in x],
+                    cps_vals,
+                    width=width,
+                    color=COLORS.get("info", "#3b82f6"),
+                    label="CPS",
+                )
+                ax.set_xticks(list(x))
+                ax.set_xticklabels(labels, rotation=20, ha="right", color=fg_color)
+                ax.tick_params(axis="y", colors=fg_color)
+                for spine in ax.spines.values():
+                    spine.set_color(fg_color)
+                ax.set_ylabel("Tutar (€)", color=fg_color)
+                ax.legend(loc="upper right", frameon=False, fontsize=9)
+                for bar_group in (bars1, bars2, bars3):
+                    for bar in bar_group:
+                        value = bar.get_height()
+                        ax.text(
+                            bar.get_x() + bar.get_width() / 2,
+                            value,
+                            format_currency(value),
+                            ha="center",
+                            va="bottom",
+                            fontsize=8,
+                            color=fg_color,
+                            rotation=90 if len(labels) > 6 else 0,
+                        )
+                fig.tight_layout()
+                canvas = FigureCanvasTkAgg(fig, master=parent)
+                canvas.draw()
+                canvas.get_tk_widget().pack(fill="both", expand=True)
+                self._report_canvases.append(canvas)
+            else:
+                draw_canvas_line_chart(
+                    parent,
+                    labels,
+                    [totals, cpi_vals, cps_vals],
+                    [accent, secondary, COLORS.get("info", "#3b82f6")],
+                    ["Toplam", "CPI", "CPS"],
+                )
 
         def render_monthly_chart(parent: ttk.Frame, monthly_df: pd.DataFrame) -> None:
             if monthly_df.empty:
@@ -2179,25 +2253,34 @@ class SalesEntryApp:
             totals = normalise_numeric(monthly_df["Amount"].tolist())
             cpi_vals = normalise_numeric(monthly_df["CPI"].tolist())
             cps_vals = normalise_numeric(monthly_df["CPS"].tolist())
-            fig = Figure(figsize=(5.4, 2.8), dpi=100)
-            ax = fig.add_subplot(111)
-            fig.patch.set_facecolor(card_bg)
-            ax.set_facecolor(card_bg)
-            ax.plot(labels, totals, marker="o", color=accent, label="Toplam")
-            ax.plot(labels, cpi_vals, marker="o", color=secondary, label="CPI")
-            ax.plot(labels, cps_vals, marker="o", color=COLORS.get("info", "#3b82f6"), label="CPS")
-            ax.set_xticks(range(len(labels)))
-            ax.set_xticklabels(labels, rotation=25, ha="right", color=fg_color)
-            ax.tick_params(axis="y", colors=fg_color)
-            for spine in ax.spines.values():
-                spine.set_color(fg_color)
-            ax.set_ylabel("Tutar (€)", color=fg_color)
-            ax.legend(loc="upper left", frameon=False, fontsize=9)
-            fig.tight_layout()
-            canvas = FigureCanvasTkAgg(fig, master=parent)
-            canvas.draw()
-            canvas.get_tk_widget().pack(fill="both", expand=True)
-            self._report_canvases.append(canvas)
+            if matplotlib_available:
+                fig = Figure(figsize=(5.4, 2.8), dpi=100)
+                ax = fig.add_subplot(111)
+                fig.patch.set_facecolor(card_bg)
+                ax.set_facecolor(card_bg)
+                ax.plot(labels, totals, marker="o", color=accent, label="Toplam")
+                ax.plot(labels, cpi_vals, marker="o", color=secondary, label="CPI")
+                ax.plot(labels, cps_vals, marker="o", color=COLORS.get("info", "#3b82f6"), label="CPS")
+                ax.set_xticks(range(len(labels)))
+                ax.set_xticklabels(labels, rotation=25, ha="right", color=fg_color)
+                ax.tick_params(axis="y", colors=fg_color)
+                for spine in ax.spines.values():
+                    spine.set_color(fg_color)
+                ax.set_ylabel("Tutar (€)", color=fg_color)
+                ax.legend(loc="upper left", frameon=False, fontsize=9)
+                fig.tight_layout()
+                canvas = FigureCanvasTkAgg(fig, master=parent)
+                canvas.draw()
+                canvas.get_tk_widget().pack(fill="both", expand=True)
+                self._report_canvases.append(canvas)
+            else:
+                draw_canvas_line_chart(
+                    parent,
+                    labels,
+                    [totals, cpi_vals, cps_vals],
+                    [accent, secondary, COLORS.get("info", "#3b82f6")],
+                    ["Toplam", "CPI", "CPS"],
+                )
 
         # Genel satış özeti
         overall_frame = ttk.LabelFrame(container, text="Genel Satış Özeti", style="Card.TLabelframe")
@@ -2344,8 +2427,7 @@ class SalesEntryApp:
                 "Bilgi",
                 "Raporlanacak veri bulunamadı. Excel çıktısı yine de oluşturulacaktır.",
             )
-        else:
-            self._show_reporting_dashboard(filtered_df)
+        self._show_reporting_dashboard(filtered_df)
 
         progress_window = tk.Toplevel(self.root)
         progress_window.title("Rapor Oluşturuluyor")
